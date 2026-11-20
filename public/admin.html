@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Portal — Sai Jyothsna Caterers &amp; Suppliers</title>
+  <meta name="description" content="Secure admin portal for Sai Jyothsna Caterers & Suppliers. Manage bookings, menu, services, customers, inquiries, reviews and business settings.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="css/admin.css">
+  <script src="js/admin.js" defer></script>
+</head>
+<body>
+
+  <!-- ================= LOGIN / AUTH VIEW ================= -->
+  <div id="auth-view" class="auth-view" hidden>
+    <div class="auth-card">
+      <img src="assets/logo.jpg" alt="Sai Jyothsna Caterers &amp; Suppliers logo" class="auth-logo">
+      <h1 class="auth-title">Admin Portal</h1>
+      <p class="auth-subtitle">Sai Jyothsna Caterers &amp; Suppliers</p>
+
+      <!-- Login form -->
+      <form id="login-form" class="auth-form" novalidate>
+        <div id="login-error" class="alert alert-error" hidden></div>
+        <div id="login-info" class="alert alert-info" hidden></div>
+        <label class="form-label" for="login-email">Email</label>
+        <input type="email" id="login-email" class="form-input" autocomplete="email" placeholder="admin@example.com" required>
+        <label class="form-label" for="login-password">Password</label>
+        <input type="password" id="login-password" class="form-input" autocomplete="current-password" placeholder="••••••••" required>
+        <button type="submit" id="login-submit" class="btn btn-primary btn-block">Sign In</button>
+        <button type="button" id="forgot-password-link" class="link-btn">Forgot password?</button>
+      </form>
+
+      <!-- Forgot password form -->
+      <form id="forgot-form" class="auth-form" hidden novalidate>
+        <div id="forgot-error" class="alert alert-error" hidden></div>
+        <div id="forgot-info" class="alert alert-info" hidden></div>
+        <p class="auth-note">Enter your admin email and we will send password-reset instructions.</p>
+        <label class="form-label" for="forgot-email">Email</label>
+        <input type="email" id="forgot-email" class="form-input" autocomplete="email" placeholder="admin@example.com" required>
+        <button type="submit" id="forgot-submit" class="btn btn-primary btn-block">Send Reset Instructions</button>
+        <button type="button" id="forgot-back-link" class="link-btn">Back to sign in</button>
+      </form>
+
+      <!-- Forced password change form -->
+      <form id="change-password-form" class="auth-form" hidden novalidate>
+        <div id="change-password-error" class="alert alert-error" hidden></div>
+        <p class="auth-note">You must change your password before continuing.</p>
+        <label class="form-label" for="change-old-password">Current password</label>
+        <input type="password" id="change-old-password" class="form-input" autocomplete="current-password" required>
+        <label class="form-label" for="change-new-password">New password (min. 8 characters)</label>
+        <input type="password" id="change-new-password" class="form-input" autocomplete="new-password" minlength="8" required>
+        <label class="form-label" for="change-confirm-password">Confirm new password</label>
+        <input type="password" id="change-confirm-password" class="form-input" autocomplete="new-password" minlength="8" required>
+        <button type="submit" id="change-password-submit" class="btn btn-primary btn-block">Change Password &amp; Continue</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= PORTAL SHELL ================= -->
+  <div id="portal-view" class="portal" hidden>
+    <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-brand">
+        <img src="assets/logo.jpg" alt="Sai Jyothsna logo" class="sidebar-logo">
+        <div>
+          <p class="sidebar-brand-name">Sai Jyothsna</p>
+          <p class="sidebar-brand-sub">Caterers &amp; Suppliers</p>
+        </div>
+      </div>
+      <nav class="sidebar-nav" aria-label="Admin sections">
+        <button class="nav-item active" data-section="dashboard"><i class="fa-solid fa-gauge-high"></i><span>Dashboard</span></button>
+        <button class="nav-item" data-section="bookings"><i class="fa-solid fa-calendar-check"></i><span>Bookings</span></button>
+        <button class="nav-item" data-section="items"><i class="fa-solid fa-utensils"></i><span>Menu Items</span></button>
+        <button class="nav-item" data-section="categories"><i class="fa-solid fa-layer-group"></i><span>Categories</span></button>
+        <button class="nav-item" data-section="services"><i class="fa-solid fa-bell-concierge"></i><span>Services</span></button>
+        <button class="nav-item" data-section="customers"><i class="fa-solid fa-users"></i><span>Customers</span></button>
+        <button class="nav-item" data-section="inquiries"><i class="fa-solid fa-envelope-open-text"></i><span>Inquiries</span></button>
+        <button class="nav-item" data-section="reviews"><i class="fa-solid fa-star"></i><span>Reviews</span></button>
+        <button class="nav-item" data-section="settings"><i class="fa-solid fa-gear"></i><span>Settings</span></button>
+        <button class="nav-item" data-section="admins"><i class="fa-solid fa-user-shield"></i><span>Admins</span></button>
+        <button class="nav-item" data-section="outbox"><i class="fa-solid fa-paper-plane"></i><span>Outbox</span></button>
+        <button class="nav-item" data-section="audit"><i class="fa-solid fa-clipboard-list"></i><span>Audit Log</span></button>
+      </nav>
+      <div class="sidebar-footer">
+        <a class="nav-item nav-link" href="/" target="_blank" rel="noopener"><i class="fa-solid fa-globe"></i><span>View Website</span></a>
+        <button class="nav-item nav-logout" id="logout-btn"><i class="fa-solid fa-right-from-bracket"></i><span>Logout</span></button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button id="sidebar-toggle" class="icon-btn" aria-label="Toggle navigation menu"><i class="fa-solid fa-bars"></i></button>
+        <h2 id="section-title" class="topbar-title">Dashboard</h2>
+        <div class="topbar-user">
+          <i class="fa-solid fa-circle-user"></i>
+          <span id="admin-user-label">Admin</span>
+        </div>
+      </header>
+
+      <main class="content">
+
+        <!-- ======= DASHBOARD ======= -->
+        <section id="section-dashboard" class="view-section active" data-title="Dashboard">
+          <!-- Shown only on the Vercel demo deployment (ephemeral /tmp storage). -->
+          <div id="dashboard-ephemeral-notice" class="alert alert-warning" hidden>
+            <span class="alert-icon"><i class="fa-solid fa-triangle-exclamation"></i></span>
+            <span class="alert-text">Demo deployment on Vercel: bookings, inquiries, customers and admin changes are stored temporarily and may reset when the server restarts. Menu items and prices re-seed automatically. For permanent storage, deploy on a VPS or connect a hosted database.</span>
+            <button type="button" class="alert-dismiss" id="dashboard-ephemeral-dismiss" aria-label="Dismiss">&times;</button>
+          </div>
+          <div id="dashboard-error" class="alert alert-error" hidden></div>
+          <div id="dashboard-loading" class="loading-row"><span class="spinner"></span> Loading dashboard…</div>
+          <div id="dashboard-content" hidden>
+            <div class="stat-grid">
+              <div class="stat-card"><p class="stat-label">Total Bookings</p><p class="stat-value" id="stat-bookings-total">—</p></div>
+              <div class="stat-card"><p class="stat-label">Pending</p><p class="stat-value" id="stat-bookings-pending">—</p></div>
+              <div class="stat-card"><p class="stat-label">Confirmed</p><p class="stat-value" id="stat-bookings-confirmed">—</p></div>
+              <div class="stat-card"><p class="stat-label">Completed</p><p class="stat-value" id="stat-bookings-completed">—</p></div>
+              <div class="stat-card"><p class="stat-label">Cancelled</p><p class="stat-value" id="stat-bookings-cancelled">—</p></div>
+              <div class="stat-card stat-card-highlight"><p class="stat-label">Revenue Estimate</p><p class="stat-value" id="stat-revenue">—</p><p class="stat-note">Confirmed + completed bookings</p></div>
+              <div class="stat-card"><p class="stat-label">Customers</p><p class="stat-value" id="stat-customers">—</p></div>
+              <div class="stat-card"><p class="stat-label">Pending Inquiries</p><p class="stat-value" id="stat-inquiries">—</p></div>
+              <div class="stat-card"><p class="stat-label">Menu Items</p><p class="stat-value" id="stat-items">—</p></div>
+              <div class="stat-card"><p class="stat-label">Services</p><p class="stat-value" id="stat-services">—</p></div>
+            </div>
+
+            <div class="dash-grid">
+              <div class="panel dash-wide">
+                <h3 class="panel-title">Recent Bookings</h3>
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead><tr><th>Quote No.</th><th>Customer</th><th>Event</th><th>Date</th><th>Total</th><th>Status</th></tr></thead>
+                    <tbody id="dashboard-recent-bookings"></tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="panel">
+                <h3 class="panel-title">Pending Inquiries</h3>
+                <ul id="dashboard-pending-inquiries" class="simple-list"></ul>
+              </div>
+              <div class="panel">
+                <h3 class="panel-title">Monthly Revenue</h3>
+                <ul id="dashboard-monthly-revenue" class="simple-list"></ul>
+              </div>
+              <div class="panel">
+                <h3 class="panel-title">Popular Items (Top 5)</h3>
+                <ul id="dashboard-popular-items" class="simple-list"></ul>
+              </div>
+              <div class="panel dash-wide">
+                <h3 class="panel-title">Upcoming Events</h3>
+                <ul id="dashboard-upcoming-events" class="simple-list"></ul>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ======= BOOKINGS ======= -->
+        <section id="section-bookings" class="view-section" data-title="Bookings">
+          <div class="toolbar">
+            <input type="search" id="bookings-search" class="form-input toolbar-input" placeholder="Search name, phone or quote no.">
+            <select id="bookings-status-filter" class="form-input toolbar-input">
+              <option value="">All statuses</option>
+              <option value="pending">Pending</option>
+              <option value="confirmed">Confirmed</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <input type="date" id="bookings-from" class="form-input toolbar-input" aria-label="From date">
+            <input type="date" id="bookings-to" class="form-input toolbar-input" aria-label="To date">
+            <button id="bookings-refresh" class="btn btn-secondary"><i class="fa-solid fa-rotate"></i> Refresh</button>
+          </div>
+          <div id="bookings-error" class="alert alert-error" hidden></div>
+          <div id="bookings-loading" class="loading-row"><span class="spinner"></span> Loading bookings…</div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Quote No.</th><th>Customer</th><th>Event</th><th>Date</th><th>Guests</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody id="bookings-table-body"></tbody>
+            </table>
+          </div>
+          <p id="bookings-empty" class="empty-note" hidden>No bookings found.</p>
+        </section>
+
+        <!-- ======= MENU ITEMS ======= -->
+        <section id="section-items" class="view-section" data-title="Menu Items">
+          <div class="toolbar">
+            <input type="search" id="items-search" class="form-input toolbar-input" placeholder="Search menu items…">
+            <select id="items-category-filter" class="form-input toolbar-input">
+              <option value="">All categories</option>
+            </select>
+            <button id="items-add-btn" class="btn btn-primary"><i class="fa-solid fa-plus"></i> Add Item</button>
+          </div>
+          <div id="items-error" class="alert alert-error" hidden></div>
+          <div id="items-loading" class="loading-row"><span class="spinner"></span> Loading menu items…</div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th></th><th>Name</th><th>Category</th><th>Price</th><th>Veg</th><th>Available</th><th>Actions</th></tr></thead>
+              <tbody id="items-table-body"></tbody>
+            </table>
+          </div>
+          <p id="items-empty" class="empty-note" hidden>No menu items found.</p>
+        </section>
+
+        <!-- ======= CATEGORIES ======= -->
+        <section id="section-categories" class="view-section" data-title="Categories">
+          <div class="toolbar">
+            <button id="categories-add-btn" class="btn btn-primary"><i class="fa-solid fa-plus"></i> Add Category</button>
+          </div>
+          <div id="categories-error" class="alert alert-error" hidden></div>
+          <div id="categories-loading" class="loading-row"><span class="spinner"></span> Loading categories…</div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Order</th><th>Name (EN)</th><th>Name (TE)</th><th>Name (HI)</th><th>Active</th><th>Actions</th></tr></thead>
+              <tbody id="categories-table-body"></tbody>
+            </table>
+          </div>
+          <p id="categories-empty" class="empty-note" hidden>No categories found.</p>
+        </section>
+
+        <!-- ======= SERVICES ======= -->
+        <section id="section-services" class="view-section" data-title="Services">
+          <div class="toolbar">
+            <button id="services-add-btn" class="btn btn-primary"><i class="fa-solid fa-plus"></i> Add Service</button>
+          </div>
+          <div id="services-error" class="alert alert-error" hidden></div>
+          <div id="services-loading" class="loading-row"><span class="spinner"></span> Loading services…</div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Name</th><th>Type</th><th>Unit Price</th><th>Default Qty</th><th>Available</th><th>Actions</th></tr></thead>
+              <tbody id="services-table-body"></tbody>
+            </table>
+          </div>
+          <p id="services-empty" class="empty-note" hidden>No services found.</p>
+        </section>
+
+        <!-- ======= CUSTOMERS ======= -->
+        <section id="section-customers" class="view-section" data-title="Customers">
+          <div class="toolbar">
+            <input type="search" id="customers-search" class="form-input toolbar-input" placeholder="Search customers by name or phone…">
+          </div>
+          <div id="customers-error" class="alert alert-error" hidden></div>
+          <div id="customers-loading" class="loading-row"><span class="spinner"></span> Loading customers…</div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Name</th><th>Phone</th><th>Bookings</th><th>Last Booking</th><th>Actions</th></tr></thead>
+              <tbody id="customers-table-body"></tbody>
+            </table>
+          </div>
+          <p id="customers-empty" class="empty-note" hidden>No customers found.</p>
+        </section>
+
+        <!-- ======= INQUIRIES ======= -->
+        <section id="section-inquiries" class="view-section" data-title="Inquiries">
+          <div class="toolbar">
+            <select id="inquiries-status-filter" class="form-input toolbar-input">
+              <option value="">All statuses</option>
+              <option value="new">New</option>
+              <option value="contacted">Contacted</option>
+              <option value="closed">Closed</option>
+            </select>
+            <button id="inquiries-refresh" class="btn btn-secondary"><i class="fa-solid fa-rotate"></i> Refresh</button>
+          </div>
+          <div id="inquiries-error" class="alert alert-error" hidden></div>
+          <div id="inquiries-loading" class="loading-row"><span class="spinner"></span> Loading inquiries…</div>
+          <div id="inquiries-list" class="card-list"></div>
+          <p id="inquiries-empty" class="empty-note" hidden>No inquiries found.</p>
+        </section>
+
+        <!-- ======= REVIEWS ======= -->
+        <section id="section-reviews" class="view-section" data-title="Reviews">
+          <div id="reviews-error" class="alert alert-error" hidden></div>
+          <div id="reviews-loading" class="loading-row"><span class="spinner"></span> Loading reviews…</div>
+          <div id="reviews-list" class="card-list"></div>
+          <p id="reviews-empty" class="empty-note" hidden>No reviews yet.</p>
+        </section>
+
+        <!-- ======= SETTINGS ======= -->
+        <section id="section-settings" class="view-section" data-title="Business Settings">
+          <div id="settings-error" class="alert alert-error" hidden></div>
+          <div id="settings-success" class="alert alert-success" hidden></div>
+          <div id="settings-loading" class="loading-row"><span class="spinner"></span> Loading settings…</div>
+          <form id="settings-form" class="panel form-panel" hidden novalidate>
+            <h3 class="panel-title">Business Details</h3>
+            <div class="form-grid">
+              <div><label class="form-label" for="settings-name">Business name</label><input type="text" id="settings-name" class="form-input"></div>
+              <div><label class="form-label" for="settings-owner">Owner name</label><input type="text" id="settings-owner" class="form-input"></div>
+              <div><label class="form-label" for="settings-phone">Phone</label><input type="tel" id="settings-phone" class="form-input"></div>
+              <div><label class="form-label" for="settings-email">Email</label><input type="email" id="settings-email" class="form-input"></div>
+              <div><label class="form-label" for="settings-whatsapp">WhatsApp number</label><input type="tel" id="settings-whatsapp" class="form-input"></div>
+              <div class="form-grid-full"><label class="form-label" for="settings-address">Address</label><textarea id="settings-address" class="form-input" rows="2"></textarea></div>
+              <div><label class="form-label" for="settings-gst-number">GST number</label><input type="text" id="settings-gst-number" class="form-input" placeholder="36AAAAA1111A1Z1"></div>
+              <div><label class="form-label" for="settings-gst-rate">GST rate (%)</label><input type="number" id="settings-gst-rate" class="form-input" step="0.1" min="0"></div>
+              <div><label class="form-label" for="settings-service-charge">Service charge rate (%)</label><input type="number" id="settings-service-charge" class="form-input" step="0.1" min="0"></div>
+              <div><label class="form-label" for="settings-transport">Default transport price (₹)</label><input type="number" id="settings-transport" class="form-input" step="1" min="0"></div>
+              <div><label class="form-label" for="settings-min-guests">Minimum guests</label><input type="number" id="settings-min-guests" class="form-input" step="1" min="1"></div>
+            </div>
+            <h3 class="panel-title panel-title-spaced">Admin Notifications</h3>
+            <div class="form-grid">
+              <div><label class="form-label" for="settings-notify-email">Admin notification email</label><input type="email" id="settings-notify-email" class="form-input"></div>
+              <div><label class="form-label" for="settings-notify-whatsapp">Admin WhatsApp number</label><input type="tel" id="settings-notify-whatsapp" class="form-input"></div>
+            </div>
+            <p class="form-note">Email and WhatsApp notifications require SMTP / WhatsApp environment configuration on the server (see <code>.env.example</code>). Without it, notifications are recorded in the Outbox but cannot be delivered.</p>
+            <button type="submit" id="settings-save-btn" class="btn btn-primary"><i class="fa-solid fa-floppy-disk"></i> Save Settings</button>
+          </form>
+        </section>
+
+        <!-- ======= ADMINS ======= -->
+        <section id="section-admins" class="view-section" data-title="Admins">
+          <div class="panel form-panel">
+            <h3 class="panel-title">Add Admin</h3>
+            <form id="admin-add-form" class="form-grid" novalidate>
+              <div><label class="form-label" for="admin-add-email">Email</label><input type="email" id="admin-add-email" class="form-input" required></div>
+              <div><label class="form-label" for="admin-add-name">Name</label><input type="text" id="admin-add-name" class="form-input"></div>
+              <div><label class="form-label" for="admin-add-password">Password (min. 8 characters)</label><input type="password" id="admin-add-password" class="form-input" minlength="8" required></div>
+              <div class="form-actions"><button type="submit" id="admin-add-submit" class="btn btn-primary"><i class="fa-solid fa-user-plus"></i> Add Admin</button></div>
+            </form>
+          </div>
+          <div id="admins-error" class="alert alert-error" hidden></div>
+          <div id="admins-loading" class="loading-row"><span class="spinner"></span> Loading admins…</div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Created</th><th>Actions</th></tr></thead>
+              <tbody id="admins-table-body"></tbody>
+            </table>
+          </div>
+          <p id="admins-empty" class="empty-note" hidden>No admins found.</p>
+        </section>
+
+        <!-- ======= OUTBOX ======= -->
+        <section id="section-outbox" class="view-section" data-title="Outbox">
+          <div class="toolbar">
+            <select id="outbox-status-filter" class="form-input toolbar-input">
+              <option value="">All statuses</option>
+              <option value="pending">Pending</option>
+              <option value="sent">Sent</option>
+              <option value="failed">Failed</option>
+            </select>
+            <button id="outbox-refresh" class="btn btn-secondary"><i class="fa-solid fa-rotate"></i> Refresh</button>
+          </div>
+          <div id="outbox-error" class="alert alert-error" hidden></div>
+          <div id="outbox-loading" class="loading-row"><span class="spinner"></span> Loading outbox…</div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Channel</th><th>Recipient</th><th>Subject</th><th>Related</th><th>Status</th><th>Error</th><th>Created</th><th>Sent</th><th>Actions</th></tr></thead>
+              <tbody id="outbox-table-body"></tbody>
+            </table>
+          </div>
+          <p id="outbox-empty" class="empty-note" hidden>No notifications found.</p>
+        </section>
+
+        <!-- ======= AUDIT LOG ======= -->
+        <section id="section-audit" class="view-section" data-title="Audit Log">
+          <div id="audit-error" class="alert alert-error" hidden></div>
+          <div id="audit-loading" class="loading-row"><span class="spinner"></span> Loading audit log…</div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Time</th><th>Admin</th><th>Action</th><th>Detail</th></tr></thead>
+              <tbody id="audit-table-body"></tbody>
+            </table>
+          </div>
+          <p id="audit-empty" class="empty-note" hidden>No audit entries yet.</p>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- ================= MODALS ================= -->
+
+  <!-- Booking detail -->
+  <div id="booking-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="booking-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h3 id="booking-modal-title" class="modal-title">Booking</h3>
+        <button class="icon-btn modal-close" data-close="booking-modal" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="booking-modal-body" class="modal-body"></div>
+      <div class="modal-footer">
+        <a id="booking-print-link" class="btn btn-secondary" href="#" target="_blank" rel="noopener"><i class="fa-solid fa-print"></i> Printable Quotation</a>
+        <span class="modal-footer-spacer"></span>
+        <button class="btn btn-secondary" data-close="booking-modal">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Menu item form -->
+  <div id="item-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="item-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h3 id="item-modal-title" class="modal-title">Add Menu Item</h3>
+        <button class="icon-btn modal-close" data-close="item-modal" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="item-form" class="modal-body" novalidate>
+        <input type="hidden" id="item-id">
+        <div id="item-form-error" class="alert alert-error" hidden></div>
+        <div class="form-grid">
+          <div><label class="form-label" for="item-name-en">Name (English) *</label><input type="text" id="item-name-en" class="form-input" required></div>
+          <div><label class="form-label" for="item-name-te">Name (Telugu)</label><input type="text" id="item-name-te" class="form-input"></div>
+          <div><label class="form-label" for="item-name-hi">Name (Hindi)</label><input type="text" id="item-name-hi" class="form-input"></div>
+          <div><label class="form-label" for="item-category">Category *</label><select id="item-category" class="form-input" required></select></div>
+          <div><label class="form-label" for="item-price">Price (₹) *</label><input type="number" id="item-price" class="form-input" step="0.01" min="0" required></div>
+          <div class="form-grid-full"><label class="form-label" for="item-desc-en">Description (English)</label><textarea id="item-desc-en" class="form-input" rows="2"></textarea></div>
+          <div><label class="form-label" for="item-desc-te">Description (Telugu)</label><textarea id="item-desc-te" class="form-input" rows="2"></textarea></div>
+          <div><label class="form-label" for="item-desc-hi">Description (Hindi)</label><textarea id="item-desc-hi" class="form-input" rows="2"></textarea></div>
+          <div class="form-grid-full"><label class="form-label" for="item-image-url">Image URL</label><input type="url" id="item-image-url" class="form-input" placeholder="https://…"></div>
+          <div class="form-grid-full">
+            <label class="form-label" for="item-image-file">Or upload an image</label>
+            <input type="file" id="item-image-file" class="form-input" accept="image/*">
+            <div class="image-preview-row">
+              <img id="item-image-preview" class="image-preview" src="" alt="" hidden>
+              <span id="item-image-status" class="image-status">No image selected</span>
+            </div>
+          </div>
+          <div class="checkbox-row"><input type="checkbox" id="item-is-veg" checked><label for="item-is-veg">Vegetarian</label></div>
+          <div class="checkbox-row"><input type="checkbox" id="item-is-available" checked><label for="item-is-available">Available for booking</label></div>
+        </div>
+      </form>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close="item-modal">Cancel</button>
+        <button type="submit" form="item-form" id="item-save-btn" class="btn btn-primary">Save Item</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Category form -->
+  <div id="category-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="category-modal-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="category-modal-title" class="modal-title">Add Category</h3>
+        <button class="icon-btn modal-close" data-close="category-modal" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="category-form" class="modal-body" novalidate>
+        <input type="hidden" id="category-id">
+        <div id="category-form-error" class="alert alert-error" hidden></div>
+        <div class="form-grid">
+          <div><label class="form-label" for="category-name-en">Name (English) *</label><input type="text" id="category-name-en" class="form-input" required></div>
+          <div><label class="form-label" for="category-order">Order</label><input type="number" id="category-order" class="form-input" step="1" min="0" value="0"></div>
+          <div><label class="form-label" for="category-name-te">Name (Telugu)</label><input type="text" id="category-name-te" class="form-input"></div>
+          <div><label class="form-label" for="category-name-hi">Name (Hindi)</label><input type="text" id="category-name-hi" class="form-input"></div>
+          <div class="checkbox-row"><input type="checkbox" id="category-is-active" checked><label for="category-is-active">Active</label></div>
+        </div>
+      </form>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close="category-modal">Cancel</button>
+        <button type="submit" form="category-form" id="category-save-btn" class="btn btn-primary">Save Category</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Service form -->
+  <div id="service-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="service-modal-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="service-modal-title" class="modal-title">Add Service</h3>
+        <button class="icon-btn modal-close" data-close="service-modal" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="service-form" class="modal-body" novalidate>
+        <input type="hidden" id="service-id">
+        <div id="service-form-error" class="alert alert-error" hidden></div>
+        <div class="form-grid">
+          <div><label class="form-label" for="service-name-en">Name (English) *</label><input type="text" id="service-name-en" class="form-input" required></div>
+          <div><label class="form-label" for="service-type">Type *</label>
+            <select id="service-type" class="form-input" required>
+              <option value="checkbox">Checkbox (flat fee)</option>
+              <option value="number">Number (count adjustable)</option>
+            </select>
+          </div>
+          <div><label class="form-label" for="service-name-te">Name (Telugu)</label><input type="text" id="service-name-te" class="form-input"></div>
+          <div><label class="form-label" for="service-name-hi">Name (Hindi)</label><input type="text" id="service-name-hi" class="form-input"></div>
+          <div><label class="form-label" for="service-price">Unit price (₹) *</label><input type="number" id="service-price" class="form-input" step="0.01" min="0" required></div>
+          <div><label class="form-label" for="service-default-qty">Default quantity</label><input type="number" id="service-default-qty" class="form-input" step="1" min="0" value="1"></div>
+          <div class="checkbox-row"><input type="checkbox" id="service-is-available" checked><label for="service-is-available">Available for booking</label></div>
+        </div>
+      </form>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close="service-modal">Cancel</button>
+        <button type="submit" form="service-form" id="service-save-btn" class="btn btn-primary">Save Service</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Customer detail -->
+  <div id="customer-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="customer-modal-title">
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h3 id="customer-modal-title" class="modal-title">Customer</h3>
+        <button class="icon-btn modal-close" data-close="customer-modal" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="customer-modal-body" class="modal-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close="customer-modal">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Inquiry detail -->
+  <div id="inquiry-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="inquiry-modal-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="inquiry-modal-title" class="modal-title">Inquiry</h3>
+        <button class="icon-btn modal-close" data-close="inquiry-modal" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div id="inquiry-modal-body" class="modal-body"></div>
+      <div id="inquiry-modal-footer" class="modal-footer"></div>
+    </div>
+  </div>
+
+  <!-- Review reply -->
+  <div id="review-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="review-modal-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="review-modal-title" class="modal-title">Owner Reply</h3>
+        <button class="icon-btn modal-close" data-close="review-modal" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="review-form" class="modal-body" novalidate>
+        <input type="hidden" id="review-id">
+        <div id="review-form-error" class="alert alert-error" hidden></div>
+        <p id="review-quote" class="review-quote"></p>
+        <label class="form-label" for="review-reply-text">Your reply</label>
+        <textarea id="review-reply-text" class="form-input" rows="4" placeholder="Write an official response to this review…"></textarea>
+      </form>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close="review-modal">Cancel</button>
+        <button type="submit" form="review-form" id="review-save-btn" class="btn btn-primary">Save Reply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm dialog -->
+  <div id="confirm-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <div class="modal modal-small">
+      <div class="modal-header">
+        <h3 id="confirm-modal-title" class="modal-title">Confirm</h3>
+        <button class="icon-btn modal-close" data-close="confirm-modal" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body"><p id="confirm-modal-message"></p></div>
+      <div class="modal-footer">
+        <button id="confirm-cancel-btn" class="btn btn-secondary">Cancel</button>
+        <button id="confirm-ok-btn" class="btn btn-danger">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toasts -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "dependencies": {
+    "bcryptjs": "3.0.3",
+    "cookie-parser": "1.4.7",
+    "express": "4.21.2",
+    "express-rate-limit": "8.7.5",
+    "helmet": "8.3.0",
+    "multer": "2.5.0",
+    "nodemailer": "10.6.1"
+  },
+  "description": "Sai Jyothsna Caterers & Suppliers — full-stack catering web application (Node.js + Express + SQLite).",
+  "engines": {
+    "node": "24.x"
+  },
+  "main": "server/server.js",
+  "name": "sai-jyothsna-caterers",
+  "private": true,
+  "scripts": {
+    "reset-admin": "node server/reset-admin.js",
+    "seed": "node server/seed.js",
+    "start": "node server/server.js",
+    "test": "node --test \"tests/*.test.js\""
+  },
+  "type": "commonjs",
+  "version": "1.0.0"
+}
