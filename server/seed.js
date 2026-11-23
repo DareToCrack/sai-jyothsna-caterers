@@ -175,70 +175,8 @@ async function seed(db, options = {}) {
   const log = options.log !== false;
   const counts = { categories: 0, foodItems: 0, services: 0, reviews: 0, settings: 0, admins: 0 };
 
-  const insertCategory = db.prepare(
-    `INSERT OR IGNORE INTO categories (id, name_en, name_te, name_hi, order_index, is_active)
-     VALUES (?, ?, ?, ?, ?, 1)`
-  );
-  for (const cat of DEFAULT_CATEGORIES) {
-    const r = await insertCategory.run(
-      cat.id, t(cat.nameKey, 'en'), t(cat.nameKey, 'te'), t(cat.nameKey, 'hi'), cat.orderIndex
-    );
-    counts.categories += r.changes;
-  }
-
-  const insertItem = db.prepare(
-    `INSERT OR IGNORE INTO food_items
-       (id, category_id, name_en, name_te, name_hi, desc_en, desc_te, desc_hi,
-        image_url, is_veg, price, is_available)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-  for (const item of DEFAULT_FOOD_ITEMS) {
-    const r = await insertItem.run(
-      item.id, item.categoryId,
-      t(item.nameKey, 'en'), t(item.nameKey, 'te'), t(item.nameKey, 'hi'),
-      t(item.descKey, 'en'), t(item.descKey, 'te'), t(item.descKey, 'hi'),
-      item.image, item.isVeg ? 1 : 0, item.price, item.isAvailable ? 1 : 0
-    );
-    counts.foodItems += r.changes;
-  }
-
-  const insertService = db.prepare(
-    `INSERT OR IGNORE INTO services
-       (id, name_en, name_te, name_hi, type, unit_price, default_quantity, is_available)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-  for (const srv of DEFAULT_SERVICES) {
-    const r = await insertService.run(
-      srv.id,
-      t(srv.nameKey, 'en'), t(srv.nameKey, 'te'), t(srv.nameKey, 'hi'),
-      srv.type, srv.unitPrice,
-      srv.quantity != null ? srv.quantity : 1,
-      srv.isAvailable ? 1 : 0
-    );
-    counts.services += r.changes;
-  }
-
-  const insertReview = db.prepare(
-    `INSERT OR IGNORE INTO reviews
-       (id, user_id, user_name, rating, event_type, comment, verified, owner_reply, is_visible, created_at)
-     VALUES (?, NULL, ?, ?, ?, ?, 1, ?, 1, ?)`
-  );
-  for (const rev of DEFAULT_REVIEWS) {
-    const r = await insertReview.run(
-      rev.id, rev.userName, rev.rating, rev.eventType, rev.comment, rev.ownerReply, rev.createdAt
-    );
-    counts.reviews += r.changes;
-  }
-
-  const insertSetting = db.prepare(
-    'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)'
-  );
-  for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-    const r = await insertSetting.run(key, JSON.stringify(value));
-    counts.settings += r.changes;
-  }
-
   // First-run admin (only when no admin with that email exists yet).
+  // This runs on every startup so a missing admin is always recreated.
   const adminEmail = (options.adminEmail || process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL).toLowerCase();
   const adminPassword = options.adminPassword || process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
   const existing = await db.prepare('SELECT id FROM admin_users WHERE email = ?').get(adminEmail);
@@ -254,6 +192,73 @@ async function seed(db, options = {}) {
     ).run(seededAdminId(adminEmail), adminEmail, passwordHash, 'Admin', nowIso());
     counts.admins += r.changes;
   }
+
+  // Fast path: if settings are already seeded, the whole data seed has
+  // run before — skip it. Every statement against Turso is a separate
+  // HTTP round trip from the serverless function to the database, and
+  // re-running ~60 inserts on every cold start took ~16s and exceeded
+  // the function's 10s limit. If a past seed crashed midway, settings
+  // will be empty and the full seed below re-runs safely (INSERT OR
+  // IGNORE everywhere, so already-inserted rows are left alone).
+  const settingsRow = await db.prepare('SELECT COUNT(*) AS n FROM settings').get();
+  if (Number(settingsRow.n) > 0) {
+    if (log) {
+      console.log(
+        `Seed skipped: database already seeded ` +
+        `(${counts.admins} admin(s) inserted).`
+      );
+    }
+    return counts;
+  }
+
+  // Full seed, one batched round trip per table (db.batch sends all of a
+  // table's statements in a single request) — ~5 requests instead of ~57.
+  const sumAffected = (results) =>
+    results.reduce((sum, r) => sum + Number(r.rowsAffected ?? 0), 0);
+
+  counts.categories = sumAffected(await db.batch(DEFAULT_CATEGORIES.map((cat) => ({
+    sql: `INSERT OR IGNORE INTO categories (id, name_en, name_te, name_hi, order_index, is_active)
+          VALUES (?, ?, ?, ?, ?, 1)`,
+    args: [cat.id, t(cat.nameKey, 'en'), t(cat.nameKey, 'te'), t(cat.nameKey, 'hi'), cat.orderIndex]
+  }))));
+
+  counts.foodItems = sumAffected(await db.batch(DEFAULT_FOOD_ITEMS.map((item) => ({
+    sql: `INSERT OR IGNORE INTO food_items
+            (id, category_id, name_en, name_te, name_hi, desc_en, desc_te, desc_hi,
+             image_url, is_veg, price, is_available)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      item.id, item.categoryId,
+      t(item.nameKey, 'en'), t(item.nameKey, 'te'), t(item.nameKey, 'hi'),
+      t(item.descKey, 'en'), t(item.descKey, 'te'), t(item.descKey, 'hi'),
+      item.image, item.isVeg ? 1 : 0, item.price, item.isAvailable ? 1 : 0
+    ]
+  }))));
+
+  counts.services = sumAffected(await db.batch(DEFAULT_SERVICES.map((srv) => ({
+    sql: `INSERT OR IGNORE INTO services
+            (id, name_en, name_te, name_hi, type, unit_price, default_quantity, is_available)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      srv.id,
+      t(srv.nameKey, 'en'), t(srv.nameKey, 'te'), t(srv.nameKey, 'hi'),
+      srv.type, srv.unitPrice,
+      srv.quantity != null ? srv.quantity : 1,
+      srv.isAvailable ? 1 : 0
+    ]
+  }))));
+
+  counts.reviews = sumAffected(await db.batch(DEFAULT_REVIEWS.map((rev) => ({
+    sql: `INSERT OR IGNORE INTO reviews
+            (id, user_id, user_name, rating, event_type, comment, verified, owner_reply, is_visible, created_at)
+          VALUES (?, NULL, ?, ?, ?, ?, 1, ?, 1, ?)`,
+    args: [rev.id, rev.userName, rev.rating, rev.eventType, rev.comment, rev.ownerReply, rev.createdAt]
+  }))));
+
+  counts.settings = sumAffected(await db.batch(Object.entries(DEFAULT_SETTINGS).map(([key, value]) => ({
+    sql: 'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)',
+    args: [key, JSON.stringify(value)]
+  }))));
 
   if (log) {
     console.log(
