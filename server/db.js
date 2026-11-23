@@ -1,12 +1,21 @@
-// db.js — SQLite database layer (Node.js v24 built-in node:sqlite, no native modules).
+// db.js — database layer on @libsql/client (one client, two backends).
 //
-// The database file lives at DB_PATH, or — on Vercel (VERCEL=1, where only
-// /tmp is writable and the filesystem is ephemeral per instance) — at
-// <os.tmpdir()>/sai-jyothsna.db, or otherwise at
-// <project>/data/sai-jyothsna.db. openDb() creates the parent directory and
-// every table (CREATE TABLE IF NOT EXISTS), so a fresh checkout just works.
-// All queries in the app use prepared statements; this module only exposes
-// the raw DatabaseSync handle plus the settings helpers.
+//   * TURSO_DATABASE_URL (+ TURSO_AUTH_TOKEN) set  -> remote Turso database
+//     (Vercel production: persistent, shared by every serverless instance).
+//   * Otherwise                                     -> local SQLite file via a
+//     `file:` URL (local dev + tests keep working offline with the same code).
+//   * On Vercel without Turso configured             -> the file lives in
+//     /tmp (demo mode: data resets when the instance is recycled, exactly
+//     as before; the admin dashboard shows the ephemeral-data notice only
+//     in this case — see routes/admin.js).
+//
+// All database access goes through the libsql client's async execute()
+// API. The handle returned by openDb() exposes a small node:sqlite-shaped
+// surface (prepare().get/.all/.run, exec, batch) so the rest of the app
+// keeps its existing query structure; every method is async and awaits
+// client.execute() underneath. A test run (NODE_ENV=test) NEVER touches
+// Turso, even if TURSO_DATABASE_URL is present in the environment — tests
+// always use the explicit temp file path they are given.
 //
 // NOTE: sessions are stateless HMAC-signed cookies (see lib.js) — there is
 // deliberately no sessions table, so auth works across serverless instances
@@ -16,14 +25,25 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { DatabaseSync } = require('node:sqlite');
+const { createClient } = require('@libsql/client');
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
-  phone TEXT UNIQUE NOT NULL,
+  -- Phone is nullable: email/password and Google accounts are created
+  -- without one (the customer enters a phone at booking time instead).
+  -- Legacy phone-only (OTP) users always have one.
+  phone TEXT UNIQUE,
   name TEXT,
   language TEXT DEFAULT 'en',
+  -- Email/password login (always available, free): email is the login id.
+  -- google_id links a Google Sign-In account (matched by google_id first,
+  -- then by email). auth_provider records how the account was created.
+  email TEXT UNIQUE,
+  password_hash TEXT,
+  google_id TEXT UNIQUE,
+  auth_provider TEXT DEFAULT 'otp'
+    CHECK (auth_provider IN ('password', 'google', 'otp')),
   created_at TEXT NOT NULL
 );
 
@@ -57,6 +77,19 @@ CREATE TABLE IF NOT EXISTS password_resets (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_password_resets_admin ON password_resets (admin_id);
+
+-- Customer password resets: same shape as password_resets (admin), kept as
+-- a separate table so the admin table's NOT NULL admin_id never has to
+-- change. Tokens are SHA-256-hashed at rest, 1-hour expiry, single-use.
+CREATE TABLE IF NOT EXISTS customer_password_resets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_customer_password_resets_user ON customer_password_resets (user_id);
 
 CREATE TABLE IF NOT EXISTS categories (
   id TEXT PRIMARY KEY,
@@ -207,6 +240,18 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs (created_at);
+
+-- Admin-uploaded item images, stored as BLOBs so they persist in every
+-- environment (the old disk-based uploads were wiped with /tmp on Vercel).
+-- id is the stored filename (<uuid>.<ext>); the image is served by
+-- GET /api/uploads/:name, which looks the row up by that name.
+CREATE TABLE IF NOT EXISTS uploads (
+  id TEXT PRIMARY KEY,
+  filename TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  data BLOB NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;
 
 // Fallback values used when a setting has never been seeded. The seed writes
@@ -239,13 +284,191 @@ function defaultDbPath() {
   return path.join(__dirname, '..', 'data', 'sai-jyothsna.db');
 }
 
-function openDb(dbPath) {
-  const resolved = dbPath || defaultDbPath();
-  fs.mkdirSync(path.dirname(resolved), { recursive: true });
-  const db = new DatabaseSync(resolved);
-  db.exec('PRAGMA foreign_keys = ON;');
-  db.exec(SCHEMA);
+/**
+ * Decide which backend to use. Precedence:
+ *   1. An explicit dbPath argument (tests + CLI tools always pass one).
+ *   2. TURSO_DATABASE_URL (+ TURSO_AUTH_TOKEN), except in tests.
+ *   3. The local default path (/tmp on Vercel, data/ locally).
+ */
+function resolveBackend(dbPath) {
+  if (dbPath) {
+    return { mode: 'local', url: 'file:' + path.resolve(dbPath), filePath: path.resolve(dbPath) };
+  }
+  if (process.env.TURSO_DATABASE_URL && process.env.NODE_ENV !== 'test') {
+    return {
+      mode: 'turso',
+      url: process.env.TURSO_DATABASE_URL,
+      authToken: process.env.TURSO_AUTH_TOKEN || undefined
+    };
+  }
+  const filePath = defaultDbPath();
+  const mode = process.env.VERCEL === '1' ? 'ephemeral' : 'local';
+  return { mode, url: 'file:' + filePath, filePath };
+}
+
+/** Coerce JS values into the shapes libsql accepts (booleans -> 1/0). */
+function coerceArgs(args) {
+  return args.map((v) => (typeof v === 'boolean' ? (v ? 1 : 0) : v));
+}
+
+/**
+ * Build the app's database handle around one libsql client. Every method
+ * is async and goes through client.execute() (or client.batch() /
+ * client.executeMultiple() for multi-statement work).
+ */
+function createDbHandle(client, mode) {
+  const isEphemeral = mode === 'ephemeral';
+  return {
+    /** Raw libsql client, for the rare call that needs it directly. */
+    client,
+    /** 'turso' | 'local' | 'ephemeral'. */
+    mode,
+    /** False only for the Vercel-without-Turso /tmp fallback. */
+    isPersistent: !isEphemeral,
+    isEphemeral,
+
+    /**
+     * Prepared-statement surface (node:sqlite-shaped, async). Each call
+     * runs one client.execute() with positional `?` parameters.
+     */
+    prepare(sql) {
+      return {
+        get: async (...args) => {
+          const r = await client.execute({ sql, args: coerceArgs(args) });
+          return r.rows[0];
+        },
+        all: async (...args) => {
+          const r = await client.execute({ sql, args: coerceArgs(args) });
+          return r.rows;
+        },
+        run: async (...args) => {
+          const r = await client.execute({ sql, args: coerceArgs(args) });
+          return {
+            changes: Number(r.rowsAffected ?? 0),
+            // libsql returns lastInsertRowid as a bigint (or undefined).
+            lastInsertRowid: r.lastInsertRowid == null ? undefined : Number(r.lastInsertRowid)
+          };
+        }
+      };
+    },
+
+    /** Run a statement, or several (schema). Returns the raw result. */
+    exec: async (sql) => client.executeMultiple(sql),
+
+    /** Direct execute() passthrough (kept for callers that need raw rows). */
+    execute: (...args) => client.execute(...args),
+
+    /**
+     * Run several statements atomically in a single transaction (one
+     * round trip to Turso). `statements` is an array of { sql, args }.
+     * This replaces the old BEGIN IMMEDIATE / COMMIT / ROLLBACK dance.
+     */
+    batch: async (statements) => client.batch(
+      statements.map((s) => ({ sql: s.sql, args: coerceArgs(s.args || []) }))
+    ),
+
+    close: () => {
+      try { client.close(); } catch { /* already closed */ }
+    }
+  };
+}
+
+/** Open the database (creating + migrating it) and return the handle. */
+async function openDb(dbPath) {
+  const backend = resolveBackend(dbPath);
+  if (backend.filePath) {
+    fs.mkdirSync(path.dirname(backend.filePath), { recursive: true });
+  }
+  const client = createClient(
+    backend.authToken
+      ? { url: backend.url, authToken: backend.authToken }
+      : { url: backend.url }
+  );
+  const db = createDbHandle(client, backend.mode);
+  // Foreign-key enforcement only sticks on a persistent connection (the
+  // local file client); remote Turso connections are stateless HTTP, so
+  // the PRAGMA is a no-op there. The app enforces referential rules in
+  // code (e.g. the category-in-use check), so this is not load-bearing.
+  if (backend.mode !== 'turso') {
+    await client.execute('PRAGMA foreign_keys = ON');
+  }
+  await db.exec(SCHEMA);
+  await migrate(db);
   return db;
+}
+
+/**
+ * Lightweight migrations for databases created before a schema change.
+ * (CREATE TABLE IF NOT EXISTS never alters an existing table, so a column
+ * added later must be added explicitly.)
+ *
+ *   1. password_resets.expires_at was missing from the schema for a short
+ *      window during the libsql conversion — add it to any database
+ *      created then, and drop any rows left without an expiry (none can
+ *      exist in practice: the INSERT always sets it, so a NULL row could
+ *      only come from that window).
+ *   2. Email/password + Google login: users.phone must become nullable
+ *      (those accounts are created without a phone) and the users table
+ *      gains email / password_hash / google_id / auth_provider. SQLite
+ *      cannot drop NOT NULL from a column in place, so a database whose
+ *      users.phone is still NOT NULL gets the standard table rebuild
+ *      (create users_new, copy the old columns, drop, rename) with
+ *      foreign keys disabled during the swap (SQLite's documented
+ *      procedure — bookings/inquiries/reviews reference users). On Turso
+ *      foreign keys are not enforced, so the PRAGMAs are skipped there.
+ *      The new columns are then added individually if still missing.
+ */
+async function migrate(db) {
+  const cols = await db.prepare('PRAGMA table_info(password_resets)').all();
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has('expires_at')) {
+    await db.prepare('ALTER TABLE password_resets ADD COLUMN expires_at TEXT').run();
+    await db.prepare('DELETE FROM password_resets WHERE expires_at IS NULL').run();
+  }
+
+  const userCols = await db.prepare('PRAGMA table_info(users)').all();
+  const userNames = new Set(userCols.map((c) => c.name));
+  const phoneCol = userCols.find((c) => c.name === 'phone');
+  if (phoneCol && phoneCol.notnull === 1) {
+    const isTurso = db.mode === 'turso';
+    if (!isTurso) await db.prepare('PRAGMA foreign_keys = OFF').run();
+    try {
+      await db.exec(`
+        CREATE TABLE users_new (
+          id TEXT PRIMARY KEY,
+          phone TEXT UNIQUE,
+          name TEXT,
+          language TEXT DEFAULT 'en',
+          email TEXT UNIQUE,
+          password_hash TEXT,
+          google_id TEXT UNIQUE,
+          auth_provider TEXT DEFAULT 'otp'
+            CHECK (auth_provider IN ('password', 'google', 'otp')),
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO users_new (id, phone, name, language, created_at)
+          SELECT id, phone, name, language, created_at FROM users;
+        DROP TABLE users;
+        ALTER TABLE users_new RENAME TO users;
+      `);
+    } finally {
+      if (!isTurso) await db.prepare('PRAGMA foreign_keys = ON').run();
+    }
+    // Re-read: the rebuild already added the new columns.
+    const rebuilt = await db.prepare('PRAGMA table_info(users)').all();
+    for (const c of rebuilt) userNames.add(c.name);
+  }
+  const newUserColumns = [
+    ['email', 'ALTER TABLE users ADD COLUMN email TEXT UNIQUE'],
+    ['password_hash', 'ALTER TABLE users ADD COLUMN password_hash TEXT'],
+    ['google_id', 'ALTER TABLE users ADD COLUMN google_id TEXT UNIQUE'],
+    ['auth_provider', "ALTER TABLE users ADD COLUMN auth_provider TEXT DEFAULT 'otp'"]
+  ];
+  for (const [name, sql] of newUserColumns) {
+    if (!userNames.has(name)) {
+      await db.prepare(sql).run();
+    }
+  }
 }
 
 function nowIso() {
@@ -253,8 +476,8 @@ function nowIso() {
 }
 
 /** Read one setting (JSON-decoded), falling back to the built-in default. */
-function getSetting(db, key, fallback) {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+async function getSetting(db, key, fallback) {
+  const row = await db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
   if (!row) {
     if (fallback !== undefined) return fallback;
     return DEFAULT_SETTINGS[key];
@@ -267,17 +490,17 @@ function getSetting(db, key, fallback) {
 }
 
 /** Write one setting (JSON-encoded). */
-function setSetting(db, key, value) {
-  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
+async function setSetting(db, key, value) {
+  await db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
     key,
     JSON.stringify(value)
   );
 }
 
 /** All settings as a plain object, defaults merged underneath stored values. */
-function getAllSettings(db) {
+async function getAllSettings(db) {
   const settings = { ...DEFAULT_SETTINGS };
-  const rows = db.prepare('SELECT key, value FROM settings').all();
+  const rows = await db.prepare('SELECT key, value FROM settings').all();
   for (const row of rows) {
     try {
       settings[row.key] = JSON.parse(row.value);
@@ -292,6 +515,7 @@ module.exports = {
   SCHEMA,
   DEFAULT_SETTINGS,
   defaultDbPath,
+  resolveBackend,
   openDb,
   nowIso,
   getSetting,

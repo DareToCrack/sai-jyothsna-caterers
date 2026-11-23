@@ -39,8 +39,8 @@ function isWhatsappCloudConfigured() {
   );
 }
 
-function recordOutbox(db, row) {
-  const result = db
+async function recordOutbox(db, row) {
+  const result = await db
     .prepare(
       `INSERT INTO notifications_outbox
          (channel, recipient, subject, body, related_type, related_id, status, error, created_at, sent_at)
@@ -77,7 +77,22 @@ async function sendEmail({ to, subject, text }) {
   });
 }
 
-async function sendWhatsappCloud({ to, text }) {
+/**
+ * Send a customer password-reset email (SMTP must be configured; throws
+ * when the send fails — the caller catches and still returns the generic
+ * forgot-password success shape, so a failure can never reveal whether
+ * the email belongs to an account).
+ */
+async function sendPasswordResetEmail({ to, resetLink }) {
+  await sendEmail({
+    to,
+    subject: 'Reset your Sai Jyothsna Caterers password',
+    text: `You requested a password reset for your Sai Jyothsna Caterers account.\n\nReset link (valid for 1 hour):\n${resetLink}\n\nIf you did not request this, you can ignore this email.`
+  });
+}
+
+/** Low-level POST to the WhatsApp Cloud API messages endpoint. */
+async function whatsappPost(payload) {
   const res = await fetch(
     `https://graph.facebook.com/v21.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
     {
@@ -86,18 +101,47 @@ async function sendWhatsappCloud({ to, text }) {
         Authorization: `Bearer ${process.env.WHATSAPP_CLOUD_TOKEN}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to,
-        type: 'text',
-        text: { body: text }
-      })
+      body: JSON.stringify(payload)
     }
   );
-  const payload = await res.text();
+  const text = await res.text();
   if (!res.ok) {
-    throw new Error(`WhatsApp Cloud HTTP ${res.status}: ${payload}`);
+    throw new Error(`WhatsApp Cloud HTTP ${res.status}: ${text}`);
   }
+  return text;
+}
+
+async function sendWhatsappCloud({ to, text }) {
+  await whatsappPost({
+    messaging_product: 'whatsapp',
+    to,
+    type: 'text',
+    text: { body: text }
+  });
+}
+
+/**
+ * Send a pre-approved WhatsApp template message (used for OTPs: Meta
+ * requires one-time passwords to use an AUTHENTICATION-category template,
+ * not free text). `bodyParams` are the {{1}}, {{2}}, … variables — for the
+ * OTP template there is exactly one: the 6-digit code.
+ */
+async function sendWhatsappTemplate({ to, templateName, languageCode = 'en', bodyParams = [] }) {
+  await whatsappPost({
+    messaging_product: 'whatsapp',
+    to,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: { code: languageCode },
+      components: [
+        {
+          type: 'body',
+          parameters: bodyParams.map((text) => ({ type: 'text', text }))
+        }
+      ]
+    }
+  });
 }
 
 function buildBookingMessage(booking, details, business) {
@@ -159,22 +203,22 @@ function buildInquiryMessage(inquiry, booking, business) {
  *                    whatsappStatus: string|null}>}
  */
 async function dispatch(db, { channel, recipient, subject, body, relatedType, relatedId }) {
-  const settings = getAllSettings(db);
+  const settings = await getAllSettings(db);
   const result = { whatsappUrl: null, emailStatus: 'pending', whatsappStatus: null };
 
   // --- Email ---
   if (isSmtpConfigured()) {
     try {
       await sendEmail({ to: recipient, subject, text: body });
-      recordOutbox(db, { channel: 'email', recipient, subject, body, relatedType, relatedId, status: 'sent' });
+      await recordOutbox(db, { channel: 'email', recipient, subject, body, relatedType, relatedId, status: 'sent' });
       result.emailStatus = 'sent';
     } catch (err) {
-      recordOutbox(db, { channel: 'email', recipient, subject, body, relatedType, relatedId, status: 'failed', error: err.message });
+      await recordOutbox(db, { channel: 'email', recipient, subject, body, relatedType, relatedId, status: 'failed', error: err.message });
       result.emailStatus = 'failed';
     }
   } else {
     // Honest outbox: no SMTP configured, so the message waits as pending.
-    recordOutbox(db, { channel: 'email', recipient, subject, body, relatedType, relatedId, status: 'pending' });
+    await recordOutbox(db, { channel: 'email', recipient, subject, body, relatedType, relatedId, status: 'pending' });
     result.emailStatus = 'pending';
   }
 
@@ -186,10 +230,10 @@ async function dispatch(db, { channel, recipient, subject, body, relatedType, re
     if (isWhatsappCloudConfigured()) {
       try {
         await sendWhatsappCloud({ to: adminWhatsapp, text: body });
-        recordOutbox(db, { channel: 'whatsapp', recipient: adminWhatsapp, subject: null, body, relatedType, relatedId, status: 'sent' });
+        await recordOutbox(db, { channel: 'whatsapp', recipient: adminWhatsapp, subject: null, body, relatedType, relatedId, status: 'sent' });
         result.whatsappStatus = 'sent';
       } catch (err) {
-        recordOutbox(db, { channel: 'whatsapp', recipient: adminWhatsapp, subject: null, body, relatedType, relatedId, status: 'failed', error: err.message });
+        await recordOutbox(db, { channel: 'whatsapp', recipient: adminWhatsapp, subject: null, body, relatedType, relatedId, status: 'failed', error: err.message });
         result.whatsappStatus = 'failed';
       }
     }
@@ -200,7 +244,7 @@ async function dispatch(db, { channel, recipient, subject, body, relatedType, re
 
 async function notifyBookingCreated(db, booking, details) {
   try {
-    const settings = getAllSettings(db);
+    const settings = await getAllSettings(db);
     const body = buildBookingMessage(booking, details, settings);
     return await dispatch(db, {
       recipient: settings.adminEmail,
@@ -217,7 +261,7 @@ async function notifyBookingCreated(db, booking, details) {
 
 async function notifyInquiryCreated(db, inquiry, booking) {
   try {
-    const settings = getAllSettings(db);
+    const settings = await getAllSettings(db);
     const body = buildInquiryMessage(inquiry, booking, settings);
     return await dispatch(db, {
       recipient: settings.adminEmail,
@@ -252,12 +296,12 @@ async function resendOutbox(db, row) {
     } else {
       throw new Error(`Unknown channel: ${row.channel}`);
     }
-    db.prepare(
+    await db.prepare(
       'UPDATE notifications_outbox SET status = ?, error = NULL, sent_at = ? WHERE id = ?'
     ).run('sent', nowIso(), row.id);
     return { status: 'sent' };
   } catch (err) {
-    db.prepare(
+    await db.prepare(
       'UPDATE notifications_outbox SET status = ?, error = ? WHERE id = ?'
     ).run('failed', err.message, row.id);
     return { status: 'failed', error: err.message };
@@ -268,10 +312,13 @@ module.exports = {
   notifyBookingCreated,
   notifyInquiryCreated,
   resendOutbox,
+  sendPasswordResetEmail,
   buildBookingMessage,
   buildInquiryMessage,
   whatsappUrl,
   isSmtpConfigured,
   isWhatsappCloudConfigured,
+  sendWhatsappCloud,
+  sendWhatsappTemplate,
   recordOutbox
 };

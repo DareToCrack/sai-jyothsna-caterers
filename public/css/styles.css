@@ -124,6 +124,24 @@ body.dark-mode .btn-gold { color: #121815; }
 .btn-danger { background-color: var(--error); color: #FFFFFF; }
 .btn-whatsapp { background-color: #25D366; color: #FFFFFF; font-weight: 700; }
 
+/* Google Sign-In: white button with dark text, per Google's branding — the
+   same look in light and dark mode so the "G" stays readable. */
+.btn-google {
+  background-color: #FFFFFF;
+  color: #1F1F1F;
+  border: 1px solid #DADCE0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  text-decoration: none;
+}
+.btn-google:hover { background-color: #F8F9FA; }
+.btn-google .fa-google {
+  background: conic-gradient(from -45deg, #EA4335, #FBBC05, #34A853, #4285F4, #EA4335);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: #4285F4;
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -440,6 +458,12 @@ body.dark-mode .section-title { color: var(--accent); }
   transition: var(--transition);
 }
 .form-input:focus { border-color: var(--secondary); box-shadow: 0 0 0 3px rgba(197, 160, 89, 0.15); }
+/* Placeholders must stay readable in both themes: the browser default grey
+   (#757575) is nearly invisible on the dark surface, so use --text-muted
+   (which switches per theme) at full opacity in every browser. */
+.form-input::placeholder { color: var(--text-muted); opacity: 1; }
+.form-input::-webkit-input-placeholder { color: var(--text-muted); opacity: 1; }
+.form-input::-moz-placeholder { color: var(--text-muted); opacity: 1; }
 .form-input:read-only { background-color: rgba(var(--primary-rgb), 0.04); color: var(--text-muted); }
 textarea.form-input { resize: vertical; min-height: 90px; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -467,6 +491,9 @@ textarea.form-input { resize: vertical; min-height: 90px; }
   display: none;
 }
 .form-success.show { display: block; }
+
+/* Small helper text under an input (e.g. the password rule). */
+.form-hint { color: var(--text-muted); font-size: 12px; margin-top: 6px; }
 
 /* Toggle switch */
 .switch { position: relative; display: inline-block; width: 48px; height: 26px; flex-shrink: 0; }
@@ -922,6 +949,22 @@ body.dark-mode .owner-reply-title { color: var(--accent); }
 }
 body.dark-mode .link-btn { color: var(--accent); }
 .text-link { display: block; width: 100%; text-align: center; margin-top: 14px; font-size: 13px; color: var(--text-muted); cursor: pointer; background: none; border: none; }
+
+/* "OR" divider between login methods (Google / OTP). */
+.auth-divider {
+  display: flex; align-items: center; gap: 12px;
+  margin: 18px 0; color: var(--text-muted); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+.auth-divider::before, .auth-divider::after {
+  content: ''; flex: 1; height: 1px; background: var(--border);
+}
+
+/* Centred link rows under the login/signup forms. */
+.auth-links { text-align: center; margin-top: 14px; font-size: 13px; }
+.text-link-inline { color: var(--primary); font-weight: 600; text-decoration: none; }
+.text-link-inline:hover { text-decoration: underline; }
+body.dark-mode .text-link-inline { color: var(--accent); }
 
 /* ================= Modals / drawer / toast ================= */
 .modal-overlay {

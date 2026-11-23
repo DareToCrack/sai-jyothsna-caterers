@@ -1,23 +1,22 @@
-// uploads.js — admin-uploaded item images.
+// uploads.js — admin-uploaded item images, stored as BLOBs in the database.
 //
-// Storage location:
-//   * Local / VPS: <project>/public/uploads/ (persistent, as before).
-//   * Vercel (VERCEL=1): <os.tmpdir()>/sjc-uploads/ — only /tmp is writable
-//     on serverless, and it is ephemeral per instance, so uploaded images
-//     reset with the instance (documented demo limitation; seeded dishes
-//     use remote Unsplash URLs and are unaffected).
+// Uploaded images live in the `uploads` table (id, filename, mime, data,
+// created_at) in EVERY environment, so they persist wherever the database
+// persists — including Turso on Vercel. There is no disk-based upload path
+// any more: the old <project>/public/uploads/ and /tmp/sjc-uploads/
+// directories are unused (files left in them from an earlier version are
+// simply ignored; seeded dishes use remote Unsplash URLs and are
+// unaffected).
 //
 // Images are served through GET /api/uploads/:name (mounted in app.js),
-// never through express.static, so the route works identically in both
-// environments. Filenames are sanitised strictly: only the multer-generated
-// `<uuid>.<ext>` shape is served, path traversal is rejected, and the
-// content type is set from a small allowlist.
+// never through express.static. Filenames are sanitised strictly: only
+// the multer-generated `<uuid>.<ext>` shape is served, path traversal is
+// rejected, and the content type comes from a small allowlist.
 'use strict';
 
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const lib = require('./lib');
+const { nowIso } = require('./db');
 
 const CONTENT_TYPES = {
   '.jpg': 'image/jpeg',
@@ -29,20 +28,7 @@ const CONTENT_TYPES = {
 // Multer generates `<randomUUID>.<ext>`; accept only that shape.
 const SAFE_FILENAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-function getUploadsDir() {
-  if (process.env.VERCEL === '1') {
-    return path.join(os.tmpdir(), 'sjc-uploads');
-  }
-  return path.join(__dirname, '..', 'public', 'uploads');
-}
-
-function ensureUploadsDir() {
-  const dir = getUploadsDir();
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
-
-/** True for URLs pointing at a locally uploaded image (new or legacy path). */
+/** True for URLs pointing at an uploaded image (new or legacy path). */
 function isLocalUploadUrl(url) {
   return (
     typeof url === 'string' &&
@@ -50,15 +36,34 @@ function isLocalUploadUrl(url) {
   );
 }
 
-/** Best-effort delete of a locally uploaded image, given its stored URL. */
-function deleteLocalUpload(url) {
-  if (!isLocalUploadUrl(url)) return;
-  try {
-    fs.unlinkSync(path.join(getUploadsDir(), path.basename(url)));
-  } catch { /* file already gone */ }
+/** The stored filename for an upload URL (basename, traversal-safe). */
+function filenameFromUrl(url) {
+  if (!isLocalUploadUrl(url)) return null;
+  const name = path.basename(url);
+  return SAFE_FILENAME_RE.test(name) && !name.includes('..') ? name : null;
 }
 
-function serveUpload(req, res) {
+/**
+ * Store an uploaded image buffer in the database.
+ * @returns {Promise<string>} the public URL (/api/uploads/<filename>)
+ */
+async function saveUpload(db, { filename, mime, buffer }) {
+  await db.prepare(
+    'INSERT OR REPLACE INTO uploads (id, filename, mime, data, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(filename, filename, mime, buffer, nowIso());
+  return `/api/uploads/${filename}`;
+}
+
+/** Best-effort delete of an uploaded image, given its stored URL. */
+async function deleteLocalUpload(db, url) {
+  const name = filenameFromUrl(url);
+  if (!name) return;
+  try {
+    await db.prepare('DELETE FROM uploads WHERE id = ?').run(name);
+  } catch { /* row already gone */ }
+}
+
+async function serveUpload(db, req, res) {
   const name = req.params.name;
   if (!name || !SAFE_FILENAME_RE.test(name) || name.includes('..')) {
     return lib.fail(res, 400, 'VALIDATION_ERROR', 'Invalid file name');
@@ -68,22 +73,22 @@ function serveUpload(req, res) {
   if (!contentType) {
     return lib.fail(res, 404, 'NOT_FOUND', 'Not found');
   }
-  const uploadsDir = getUploadsDir();
-  const resolved = path.resolve(uploadsDir, name);
-  if (!resolved.startsWith(uploadsDir + path.sep)) {
-    return lib.fail(res, 400, 'VALIDATION_ERROR', 'Invalid file name');
+  try {
+    const row = await db.prepare('SELECT mime, data FROM uploads WHERE id = ?').get(name);
+    if (!row) {
+      return lib.fail(res, 404, 'NOT_FOUND', 'Not found');
+    }
+    // libsql returns BLOB values as ArrayBuffer; convert to a Buffer.
+    const data = Buffer.isBuffer(row.data) ? row.data : Buffer.from(row.data);
+    res.setHeader('Content-Type', row.mime || contentType);
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Content-Length', data.length);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(data);
+  } catch (err) {
+    console.error('serveUpload failed:', err);
+    return lib.fail(res, 500, 'INTERNAL_ERROR', 'Something went wrong');
   }
-  return res.sendFile(resolved, {
-    headers: {
-      'Content-Type': contentType,
-      'Content-Disposition': 'inline',
-      'Cache-Control': 'public, max-age=86400'
-    }
-  }, (err) => {
-    if (err && !res.headersSent) {
-      lib.fail(res, 404, 'NOT_FOUND', 'Not found');
-    }
-  });
 }
 
-module.exports = { getUploadsDir, ensureUploadsDir, isLocalUploadUrl, deleteLocalUpload, serveUpload };
+module.exports = { isLocalUploadUrl, filenameFromUrl, saveUpload, deleteLocalUpload, serveUpload };

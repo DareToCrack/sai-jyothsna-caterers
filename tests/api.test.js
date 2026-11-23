@@ -183,7 +183,7 @@ const EXPECTED_QUOTE = {
 test.before(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sjc-test-'));
   const dbPath = path.join(tmpDir, 'test.db');
-  const created = createApp({ dbPath });
+  const created = await createApp({ dbPath });
   db = created.db;
   closeApp = created.close;
   server = created.app.listen(0);
@@ -243,7 +243,7 @@ test('expired OTP code is rejected', async () => {
   // Insert an already-expired, bcrypt-hashed code directly into the test DB.
   const hash = await bcrypt.hash('739201', 12);
   const expiredAt = new Date(Date.now() - 60 * 1000).toISOString();
-  db.prepare(
+  await db.prepare(
     'INSERT INTO otp_codes (phone, code_hash, expires_at, attempts, created_at) VALUES (?, ?, ?, 0, ?)'
   ).run(phone, hash, expiredAt, new Date().toISOString());
 
@@ -590,9 +590,11 @@ test('image upload stores the file and serves it via /api/uploads/:name', async 
 
 test('stateless sessions work across two app instances sharing SESSION_SECRET', async () => {
   // Second instance: a different temp database, the same SESSION_SECRET —
-  // the shape of two Vercel serverless instances.
+  // the shape of two Vercel serverless instances WITHOUT Turso (each with
+  // its own ephemeral /tmp database). With Turso configured the two
+  // instances share one database and the customer check below would be 200.
   const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'sjc-test-2-'));
-  const created2 = createApp({ dbPath: path.join(tmpDir2, 'test2.db') });
+  const created2 = await createApp({ dbPath: path.join(tmpDir2, 'test2.db') });
   const server2 = created2.app.listen(0);
   await new Promise((resolve) => server2.once('listening', resolve));
   const port2 = server2.address().port;
@@ -616,5 +618,610 @@ test('stateless sessions work across two app instances sharing SESSION_SECRET', 
     await new Promise((resolve) => server2.close(resolve));
     created2.close();
     fs.rmSync(tmpDir2, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (13) Keep-alive endpoint for the Turso free tier (see vercel.json cron)
+// ---------------------------------------------------------------------------
+
+test('keep-alive endpoint answers and enforces CRON_SECRET when set', async () => {
+  const client = new Client();
+  // No CRON_SECRET in the test env: open, and reports the db mode.
+  const open = await client.req('GET', '/api/cron/keep-alive');
+  assert.equal(open.status, 200);
+  assert.equal(open.body.ok, true);
+  assert.equal(open.body.dbMode, 'local');
+
+  // With a secret set, the bearer token is required.
+  process.env.CRON_SECRET = 'test-cron-secret';
+  try {
+    const noAuth = await client.req('GET', '/api/cron/keep-alive');
+    assert.equal(noAuth.status, 401);
+    // A wrong bearer token is rejected too (httpRequest for raw headers).
+    const wrong = await httpRequest({
+      method: 'GET',
+      path: '/api/cron/keep-alive',
+      headers: { Authorization: 'Bearer not-the-secret' }
+    });
+    assert.equal(wrong.status, 401);
+    const authed = await httpRequest({
+      method: 'GET',
+      path: '/api/cron/keep-alive',
+      headers: { Authorization: 'Bearer test-cron-secret' }
+    });
+    assert.equal(authed.status, 200);
+    assert.equal(authed.body.ok, true);
+  } finally {
+    delete process.env.CRON_SECRET;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (14) Phone normalization at the API level (+91 / spaces / leading 0)
+// ---------------------------------------------------------------------------
+
+test('OTP request accepts a +91-prefixed number and normalizes it', async () => {
+  const client = new Client();
+  const res = await client.req('POST', '/api/auth/request-otp', {
+    phone: '+91 98765 00021',
+    name: 'Plus Nine One'
+  });
+  assert.equal(res.status, 200, `request-otp failed: ${res.text}`);
+  // The code is stored under the normalized 10-digit number.
+  const otpRes = await client.req('GET', '/api/__test__/last-otp?phone=9876500021');
+  assert.equal(otpRes.status, 200, `last-otp failed: ${otpRes.text}`);
+  const verifyRes = await client.req('POST', '/api/auth/verify-otp', {
+    phone: '09876500021',
+    code: otpRes.body.code
+  });
+  assert.equal(verifyRes.status, 200, `verify-otp failed: ${verifyRes.text}`);
+  assert.equal(verifyRes.body.user.phone, '9876500021');
+});
+
+// ---------------------------------------------------------------------------
+// (15) Inquiries reject a past event date
+// ---------------------------------------------------------------------------
+
+test('inquiry with a past event date is rejected', async () => {
+  const client = new Client();
+  const yesterday = tomorrowPlus(-1);
+  const res = await client.req('POST', '/api/inquiries', {
+    name: 'Past Date',
+    phone: '9876500022',
+    eventDate: yesterday
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.body.message, /today or in the future/);
+});
+
+// ---------------------------------------------------------------------------
+// (16) Audit log entries carry the acting admin's email
+// ---------------------------------------------------------------------------
+
+test('audit log shows the admin email, not just the id', async () => {
+  const admin = new Client();
+  await loginAdmin(admin);
+  // Perform an audited action first.
+  const catRes = await admin.req('POST', '/api/admin/categories', { nameEn: 'Audit Email Check' });
+  assert.equal(catRes.status, 201);
+  const logs = await admin.req('GET', '/api/admin/audit-logs?limit=5');
+  assert.equal(logs.status, 200);
+  const entries = logs.body.auditLogs || logs.body.logs;
+  assert.ok(Array.isArray(entries) && entries.length > 0, 'expected audit entries');
+  const created = entries.find((e) => e.action === 'category.create');
+  assert.ok(created, 'expected a category.create audit entry');
+  assert.equal(created.adminEmail, 'admin@saijyothsna.local');
+  await admin.req('DELETE', `/api/admin/categories/${catRes.body.category.id}`);
+});
+
+// ---------------------------------------------------------------------------
+// (17) WhatsApp OTP channel (mocked Graph API call)
+// ---------------------------------------------------------------------------
+
+test('WhatsApp OTP sends the code via the approved authentication template', async () => {
+  const sms = require('../server/sms');
+  const realFetch = globalThis.fetch;
+  const calls = [];
+  // The WhatsApp channel is third in priority: make sure MSG91/Twilio are off.
+  const savedEnv = {
+    MSG91_AUTH_KEY: process.env.MSG91_AUTH_KEY,
+    TWILIO_SID: process.env.TWILIO_SID,
+    TWILIO_TOKEN: process.env.TWILIO_TOKEN,
+    TWILIO_FROM: process.env.TWILIO_FROM,
+    WHATSAPP_CLOUD_TOKEN: process.env.WHATSAPP_CLOUD_TOKEN,
+    WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID,
+    WHATSAPP_OTP_TEMPLATE: process.env.WHATSAPP_OTP_TEMPLATE
+  };
+  delete process.env.MSG91_AUTH_KEY;
+  delete process.env.TWILIO_SID;
+  delete process.env.TWILIO_TOKEN;
+  delete process.env.TWILIO_FROM;
+  process.env.WHATSAPP_CLOUD_TOKEN = 'test-wa-token';
+  process.env.WHATSAPP_PHONE_NUMBER_ID = '1234567890';
+  process.env.WHATSAPP_OTP_TEMPLATE = 'test_otp_template';
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, status: 200, text: async () => '{"messages":[{"id":"wamid.test"}]}' };
+  };
+  try {
+    const result = await sms.sendOtp('9876500031', '482913');
+    assert.equal(result.provider, 'whatsapp');
+    assert.equal(result.ok, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://graph.facebook.com/v21.0/1234567890/messages');
+    assert.equal(calls[0].options.method, 'POST');
+    assert.equal(calls[0].options.headers.Authorization, 'Bearer test-wa-token');
+    const payload = JSON.parse(calls[0].options.body);
+    assert.equal(payload.messaging_product, 'whatsapp');
+    assert.equal(payload.to, '919876500031');
+    assert.equal(payload.type, 'template');
+    assert.equal(payload.template.name, 'test_otp_template');
+    assert.equal(payload.template.language.code, 'en');
+    assert.equal(payload.template.components[0].type, 'body');
+    assert.equal(payload.template.components[0].parameters[0].type, 'text');
+    assert.equal(payload.template.components[0].parameters[0].text, '482913');
+
+    // A Graph API error is reported as a failed send, never thrown.
+    globalThis.fetch = async () => ({
+      ok: false, status: 400, text: async () => '{"error":{"message":"template not found"}}'
+    });
+    const failed = await sms.sendOtp('9876500031', '482913');
+    assert.equal(failed.provider, 'whatsapp');
+    assert.equal(failed.ok, false);
+    assert.match(failed.error, /WhatsApp Cloud HTTP 400/);
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (18) Regression: password_resets must have the expires_at column
+// (it was dropped from the schema during the libsql conversion, which broke
+// the forgot-password flow on fresh databases — the INSERT 500'd).
+// ---------------------------------------------------------------------------
+
+test('fresh database schema supports the password-reset flow', async () => {
+  const { openDb } = require('../server/db');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sjc-schema-'));
+  const dbPath = path.join(tmpDir, 'schema.db');
+  const db = await openDb(dbPath);
+  try {
+    await db.prepare(
+      'INSERT INTO password_resets (admin_id, token_hash, expires_at, used, created_at) VALUES (?, ?, ?, 0, ?)'
+    ).run('admin-1', 'hash', new Date(Date.now() + 3600000).toISOString(), new Date().toISOString());
+    const row = await db.prepare('SELECT * FROM password_resets WHERE token_hash = ?').get('hash');
+    assert.ok(row, 'expected the reset row to be readable');
+    assert.ok(new Date(row.expires_at) > new Date(), 'expected a future expiry');
+  } finally {
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (19) /api/auth/methods reflects the actual configuration
+// ---------------------------------------------------------------------------
+
+test('auth methods endpoint reflects configuration', async () => {
+  const client = new Client();
+  const savedEnv = {
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+    MSG91_AUTH_KEY: process.env.MSG91_AUTH_KEY,
+    TWILIO_SID: process.env.TWILIO_SID,
+    TWILIO_TOKEN: process.env.TWILIO_TOKEN,
+    TWILIO_FROM: process.env.TWILIO_FROM,
+    WHATSAPP_CLOUD_TOKEN: process.env.WHATSAPP_CLOUD_TOKEN,
+    WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID,
+    SMTP_HOST: process.env.SMTP_HOST,
+    SMTP_USER: process.env.SMTP_USER,
+    SMTP_PASS: process.env.SMTP_PASS
+  };
+  try {
+    for (const key of Object.keys(savedEnv)) delete process.env[key];
+    const base = await client.req('GET', '/api/auth/methods');
+    assert.equal(base.status, 200);
+    assert.equal(base.body.password, true);
+    assert.equal(base.body.google, false);
+    assert.equal(base.body.otp, false);
+    assert.equal(base.body.passwordReset, false);
+
+    process.env.GOOGLE_CLIENT_ID = 'test-google-client-id';
+    process.env.MSG91_AUTH_KEY = 'test-msg91-key';
+    process.env.SMTP_HOST = 'smtp.example.com';
+    process.env.SMTP_USER = 'user@example.com';
+    process.env.SMTP_PASS = 'secret';
+    const configured = await client.req('GET', '/api/auth/methods');
+    assert.equal(configured.body.password, true);
+    assert.equal(configured.body.google, true);
+    assert.equal(configured.body.otp, true);
+    assert.equal(configured.body.passwordReset, true);
+  } finally {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (20) Email/password signup: validation, duplicate email, success + session
+// ---------------------------------------------------------------------------
+
+test('signup validates input, rejects duplicate emails, and logs the user in', async () => {
+  const client = new Client();
+  const base = {
+    name: 'Signup User',
+    email: 'signup.user@example.com',
+    password: 'StrongPass1',
+    confirmPassword: 'StrongPass1'
+  };
+
+  // Short name.
+  let res = await client.req('POST', '/api/auth/signup', { ...base, name: 'Al' });
+  assert.equal(res.status, 400);
+  // Bad email.
+  res = await client.req('POST', '/api/auth/signup', { ...base, email: 'not-an-email' });
+  assert.equal(res.status, 400);
+  // Weak passwords: too short, no uppercase, no lowercase, no number.
+  for (const weak of ['Short1', 'alllowercase1', 'ALLUPPERCASE1', 'NoDigitsHere']) {
+    res = await client.req('POST', '/api/auth/signup', { ...base, password: weak, confirmPassword: weak });
+    assert.equal(res.status, 400, `expected weak password ${weak} to be rejected`);
+  }
+  // Mismatched confirmation.
+  res = await client.req('POST', '/api/auth/signup', { ...base, confirmPassword: 'Different1' });
+  assert.equal(res.status, 400);
+
+  // Success: 201, user returned, session cookie set.
+  res = await client.req('POST', '/api/auth/signup', base);
+  assert.equal(res.status, 201, `signup failed: ${res.text}`);
+  assert.equal(res.body.user.email, 'signup.user@example.com');
+  assert.equal(res.body.user.name, 'Signup User');
+  assert.equal(res.body.user.phone, null);
+  assert.equal(res.body.user.authProvider, 'password');
+  assert.ok(!('password_hash' in res.body.user), 'password_hash must never leak');
+  assert.ok(client.cookies.sjc_session, 'expected a session cookie after signup');
+
+  // The session works: /api/auth/me returns the same user.
+  const me = await client.req('GET', '/api/auth/me');
+  assert.equal(me.status, 200);
+  assert.equal(me.body.user.email, 'signup.user@example.com');
+
+  // Duplicate email (case-insensitive) is rejected with a clear message.
+  const dup = await new Client().req('POST', '/api/auth/signup', {
+    ...base, email: 'SIGNUP.USER@example.com'
+  });
+  assert.equal(dup.status, 409);
+  assert.equal(dup.body.error, 'EMAIL_EXISTS');
+  assert.match(dup.body.message, /already exists/);
+});
+
+// ---------------------------------------------------------------------------
+// (21) Login: same generic error for unknown email, wrong password, and
+// Google-only accounts (no account enumeration)
+// ---------------------------------------------------------------------------
+
+test('login returns the same generic error for unknown email and wrong password', async () => {
+  const generic = 'Invalid email or password';
+
+  // Unknown email.
+  let res = await new Client().req('POST', '/api/auth/login', {
+    email: 'nobody@example.com',
+    password: 'Whatever123'
+  });
+  assert.equal(res.status, 401);
+  assert.equal(res.body.error, 'INVALID_CREDENTIALS');
+  assert.equal(res.body.message, generic);
+
+  // Existing email (created by the signup test), wrong password — identical.
+  res = await new Client().req('POST', '/api/auth/login', {
+    email: 'signup.user@example.com',
+    password: 'WrongPassword1'
+  });
+  assert.equal(res.status, 401);
+  assert.equal(res.body.error, 'INVALID_CREDENTIALS');
+  assert.equal(res.body.message, generic);
+
+  // Google-only account (no password_hash) — identical again.
+  await db.prepare(
+    `INSERT INTO users (id, phone, name, language, email, google_id, auth_provider, created_at)
+     VALUES (?, NULL, ?, 'en', ?, ?, 'google', ?)`
+  ).run('test-google-only-1', 'Google Only', 'google.only@example.com', 'google-sub-only', new Date().toISOString());
+  res = await new Client().req('POST', '/api/auth/login', {
+    email: 'google.only@example.com',
+    password: 'Whatever123'
+  });
+  assert.equal(res.status, 401);
+  assert.equal(res.body.message, generic);
+
+  // Correct password works and starts a session.
+  const client = new Client();
+  res = await client.req('POST', '/api/auth/login', {
+    email: 'signup.user@example.com',
+    password: 'StrongPass1'
+  });
+  assert.equal(res.status, 200, `login failed: ${res.text}`);
+  assert.equal(res.body.user.email, 'signup.user@example.com');
+  assert.ok(client.cookies.sjc_session, 'expected a session cookie after login');
+  const me = await client.req('GET', '/api/auth/me');
+  assert.equal(me.status, 200);
+  assert.equal(me.body.user.email, 'signup.user@example.com');
+});
+
+// ---------------------------------------------------------------------------
+// (22) Google OAuth callback with mocked fetch (token + userinfo)
+// ---------------------------------------------------------------------------
+
+test('Google OAuth callback creates/links the user and starts a session', async () => {
+  const realFetch = globalThis.fetch;
+  const calls = [];
+  const savedEnv = {
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI
+  };
+  process.env.GOOGLE_CLIENT_ID = 'test-google-client-id';
+  process.env.GOOGLE_CLIENT_SECRET = 'test-google-client-secret';
+  delete process.env.GOOGLE_REDIRECT_URI;
+  try {
+    // Start the flow: redirect to Google with a state, state cookie set.
+    const client = new Client();
+    const start = await client.req('GET', '/api/auth/google');
+    assert.equal(start.status, 302);
+    assert.ok(client.cookies.sjc_oauth_state, 'expected a state cookie');
+    const location = new URL(start.headers.location);
+    assert.equal(location.origin + location.pathname, 'https://accounts.google.com/o/oauth2/v2/auth');
+    assert.equal(location.searchParams.get('client_id'), 'test-google-client-id');
+    assert.equal(location.searchParams.get('response_type'), 'code');
+    assert.equal(location.searchParams.get('scope'), 'openid email profile');
+    assert.ok(location.searchParams.get('redirect_uri').endsWith('/api/auth/google/callback'));
+    const state = location.searchParams.get('state');
+    assert.equal(state, client.cookies.sjc_oauth_state);
+
+    // Mock the Google token + userinfo endpoints.
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, options });
+      if (url === 'https://oauth2.googleapis.com/token') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: 'test-access-token', token_type: 'Bearer', expires_in: 3600 })
+        };
+      }
+      if (url === 'https://openidconnect.googleapis.com/v1/userinfo') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            sub: 'google-sub-123',
+            email: 'google.user@example.com',
+            email_verified: true,
+            name: 'Google User'
+          })
+        };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+
+    // Complete the flow: session set, redirect back to the login view.
+    const callback = await client.req('GET', `/api/auth/google/callback?code=test-code&state=${state}`);
+    assert.equal(callback.status, 302, `callback failed: ${callback.text}`);
+    assert.equal(callback.headers.location, '/#/login');
+    assert.ok(client.cookies.sjc_session, 'expected a session cookie after Google login');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].url, 'https://oauth2.googleapis.com/token');
+    assert.match(String(calls[0].options.body), /grant_type=authorization_code/);
+    assert.match(String(calls[0].options.body), /code=test-code/);
+    assert.equal(calls[1].url, 'https://openidconnect.googleapis.com/v1/userinfo');
+    assert.equal(calls[1].options.headers.Authorization, 'Bearer test-access-token');
+
+    const me = await client.req('GET', '/api/auth/me');
+    assert.equal(me.status, 200);
+    assert.equal(me.body.user.email, 'google.user@example.com');
+    assert.equal(me.body.user.name, 'Google User');
+    assert.equal(me.body.user.authProvider, 'google');
+
+    // A second Google login with the same sub returns the SAME user.
+    const client2 = new Client();
+    const start2 = await client2.req('GET', '/api/auth/google');
+    const state2 = new URL(start2.headers.location).searchParams.get('state');
+    await client2.req('GET', `/api/auth/google/callback?code=test-code-2&state=${state2}`);
+    const me2 = await client2.req('GET', '/api/auth/me');
+    assert.equal(me2.body.user.id, me.body.user.id);
+
+    // Linking: a Google login whose email matches an existing password
+    // account links the google_id to that account (same user id).
+    globalThis.fetch = async (url) => {
+      if (url === 'https://oauth2.googleapis.com/token') {
+        return { ok: true, status: 200, json: async () => ({ access_token: 'test-access-token-2' }) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          sub: 'google-sub-999',
+          email: 'signup.user@example.com',
+          email_verified: true,
+          name: 'Signup User'
+        })
+      };
+    };
+    const client3 = new Client();
+    const start3 = await client3.req('GET', '/api/auth/google');
+    const state3 = new URL(start3.headers.location).searchParams.get('state');
+    await client3.req('GET', `/api/auth/google/callback?code=test-code-3&state=${state3}`);
+    const me3 = await client3.req('GET', '/api/auth/me');
+    assert.equal(me3.body.user.email, 'signup.user@example.com');
+    const linked = await db.prepare('SELECT google_id FROM users WHERE email = ?').get('signup.user@example.com');
+    assert.equal(linked.google_id, 'google-sub-999');
+
+    // Wrong state is rejected with a redirect to the login error view.
+    const client4 = new Client();
+    const start4 = await client4.req('GET', '/api/auth/google');
+    const state4 = new URL(start4.headers.location).searchParams.get('state');
+    const badState = await client4.req('GET', `/api/auth/google/callback?code=x&state=${state4}tampered`);
+    assert.equal(badState.status, 302);
+    assert.equal(badState.headers.location, '/#/login?google=error');
+    assert.ok(!client4.cookies.sjc_session, 'no session must be created on a state mismatch');
+
+    // User denial at Google redirects with ?google=denied.
+    const denied = await new Client().req('GET', '/api/auth/google/callback?error=access_denied');
+    assert.equal(denied.status, 302);
+    assert.equal(denied.headers.location, '/#/login?google=denied');
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (23) Customer forgot/reset password (mocked SMTP: unreachable host, so the
+// send fails fast and is swallowed — the token is still created, exactly as
+// the handler guarantees). The plaintext token comes from the test hook.
+// ---------------------------------------------------------------------------
+
+test('forgot-password + reset-password flow works and cannot probe emails', async () => {
+  const savedEnv = {
+    SMTP_HOST: process.env.SMTP_HOST,
+    SMTP_PORT: process.env.SMTP_PORT,
+    SMTP_USER: process.env.SMTP_USER,
+    SMTP_PASS: process.env.SMTP_PASS,
+    SMTP_FROM: process.env.SMTP_FROM
+  };
+  // Unreachable SMTP host: nodemailer fails fast (ECONNREFUSED), which the
+  // handler swallows — the token is still created and the response is the
+  // generic success shape.
+  process.env.SMTP_HOST = '127.0.0.1';
+  process.env.SMTP_PORT = '1';
+  process.env.SMTP_USER = 'test@example.com';
+  process.env.SMTP_PASS = 'test-secret';
+  delete process.env.SMTP_FROM;
+  try {
+    const email = 'reset.user@example.com';
+    // Create the account first.
+    const signup = await new Client().req('POST', '/api/auth/signup', {
+      name: 'Reset User',
+      email,
+      password: 'OldPassword1',
+      confirmPassword: 'OldPassword1'
+    });
+    assert.equal(signup.status, 201, `signup failed: ${signup.text}`);
+
+    const client = new Client();
+    const generic = 'If an account exists for this email, a password reset link has been sent.';
+
+    // Unknown email: same generic success, no token created.
+    const unknown = await client.req('POST', '/api/auth/forgot-password', { email: 'ghost@example.com' });
+    assert.equal(unknown.status, 200);
+    assert.equal(unknown.body.message, generic);
+    const noToken = await client.req('GET', '/api/__test__/last-reset-token?email=ghost@example.com');
+    assert.equal(noToken.status, 404);
+
+    // Known email: same generic success, token created.
+    const forgot = await client.req('POST', '/api/auth/forgot-password', { email });
+    assert.equal(forgot.status, 200);
+    assert.equal(forgot.body.message, generic);
+    const tokenRes = await client.req('GET', `/api/__test__/last-reset-token?email=${email}`);
+    assert.equal(tokenRes.status, 200, `last-reset-token failed: ${tokenRes.text}`);
+    const token = tokenRes.body.token;
+    assert.equal(typeof token, 'string');
+    assert.ok(token.length >= 32);
+
+    // Weak new password is rejected; the token is NOT consumed.
+    const weak = await client.req('POST', '/api/auth/reset-password', {
+      token, newPassword: 'weak', confirmPassword: 'weak'
+    });
+    assert.equal(weak.status, 400);
+    // Mismatched confirmation is rejected.
+    const mismatch = await client.req('POST', '/api/auth/reset-password', {
+      token, newPassword: 'NewPassword1', confirmPassword: 'OtherPassword1'
+    });
+    assert.equal(mismatch.status, 400);
+
+    // Valid reset succeeds.
+    const reset = await client.req('POST', '/api/auth/reset-password', {
+      token, newPassword: 'NewPassword1', confirmPassword: 'NewPassword1'
+    });
+    assert.equal(reset.status, 200, `reset failed: ${reset.text}`);
+
+    // The token is single-use.
+    const reuse = await client.req('POST', '/api/auth/reset-password', {
+      token, newPassword: 'AnotherPass1', confirmPassword: 'AnotherPass1'
+    });
+    assert.equal(reuse.status, 400);
+    assert.equal(reuse.body.error, 'INVALID_RESET_TOKEN');
+
+    // New password works, old one does not.
+    const loginNew = await new Client().req('POST', '/api/auth/login', { email, password: 'NewPassword1' });
+    assert.equal(loginNew.status, 200);
+    const loginOld = await new Client().req('POST', '/api/auth/login', { email, password: 'OldPassword1' });
+    assert.equal(loginOld.status, 401);
+  } finally {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (24) Migration: a database created with the OLD users schema (phone NOT
+// NULL, no email/password/google columns) migrates on openDb — the phone
+// becomes nullable, the new columns appear, and existing rows survive.
+// ---------------------------------------------------------------------------
+
+test('openDb migrates a legacy users table (phone NOT NULL, no auth columns)', async () => {
+  const { createClient } = require('@libsql/client');
+  const { openDb } = require('../server/db');
+  const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sjc-legacy-'));
+  const dbPath = path.join(legacyDir, 'legacy.db');
+  // Build the OLD users table by hand (pre-email-login schema) + one user.
+  const raw = createClient({ url: 'file:' + dbPath });
+  await raw.executeMultiple(`
+    CREATE TABLE users (
+      id TEXT PRIMARY KEY,
+      phone TEXT UNIQUE NOT NULL,
+      name TEXT,
+      language TEXT DEFAULT 'en',
+      created_at TEXT NOT NULL
+    );
+    INSERT INTO users (id, phone, name, language, created_at)
+      VALUES ('legacy-user-1', '9876500099', 'Legacy User', 'en', '2026-11-20T00:00:00.000Z');
+  `);
+  raw.close();
+
+  const db = await openDb(dbPath);
+  try {
+    const cols = await db.prepare('PRAGMA table_info(users)').all();
+    const byName = new Map(cols.map((c) => [c.name, c]));
+    assert.equal(byName.get('phone').notnull, 0, 'phone must be nullable after migration');
+    assert.ok(byName.has('email'), 'email column missing after migration');
+    assert.ok(byName.has('password_hash'), 'password_hash column missing after migration');
+    assert.ok(byName.has('google_id'), 'google_id column missing after migration');
+    assert.ok(byName.has('auth_provider'), 'auth_provider column missing after migration');
+    // The legacy row survived the rebuild.
+    const legacy = await db.prepare('SELECT * FROM users WHERE id = ?').get('legacy-user-1');
+    assert.ok(legacy, 'legacy user row must survive the migration');
+    assert.equal(legacy.phone, '9876500099');
+    assert.equal(legacy.name, 'Legacy User');
+    assert.equal(legacy.auth_provider, 'otp');
+    // And a phone-less (email) user can now be inserted.
+    await db.prepare(
+      `INSERT INTO users (id, phone, name, language, email, password_hash, auth_provider, created_at)
+       VALUES (?, NULL, ?, 'en', ?, ?, 'password', ?)`
+    ).run('migrated-email-user', 'Migrated Email', 'migrated@example.com', 'hashed', new Date().toISOString());
+    const emailUser = await db.prepare('SELECT * FROM users WHERE email = ?').get('migrated@example.com');
+    assert.ok(emailUser, 'phone-less user insert must work after migration');
+    assert.equal(emailUser.phone, null);
+  } finally {
+    db.close();
+    fs.rmSync(legacyDir, { recursive: true, force: true });
   }
 });

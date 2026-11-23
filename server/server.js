@@ -9,8 +9,13 @@ const { createApp } = require('./app');
 
 const PORT = Number(process.env.PORT || 3000);
 
-const { app } = createApp();
-
-app.listen(PORT, () => {
-  console.log(`Sai Jyothsna Caterers server listening on http://localhost:${PORT}`);
-});
+createApp()
+  .then(({ app }) => {
+    app.listen(PORT, () => {
+      console.log(`Sai Jyothsna Caterers server listening on http://localhost:${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Failed to start the server:', err);
+    process.exit(1);
+  });

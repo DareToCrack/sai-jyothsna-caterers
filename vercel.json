@@ -1,1 +1,1 @@
-{"$schema":"https://openapi.vercel.sh/vercel.json","functions":{"api/index.js":{"maxDuration":10}},"rewrites":[{"destination":"/api/index.js","source":"/api/(.*)"}]}
+{"$schema":"https://openapi.vercel.sh/vercel.json","crons":[{"path":"/api/cron/keep-alive","schedule":"0 5 * * *"}],"functions":{"api/index.js":{"maxDuration":10}},"rewrites":[{"destination":"/api/index.js","source":"/api/(.*)"}]}

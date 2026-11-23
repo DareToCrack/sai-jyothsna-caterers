@@ -34,12 +34,12 @@ function customerRoutes(ctx) {
       badRequest('Nothing to update');
     }
     if (name !== null) {
-      db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, req.user.id);
+      await db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, req.user.id);
     }
     if (language !== undefined) {
-      db.prepare('UPDATE users SET language = ? WHERE id = ?').run(language, req.user.id);
+      await db.prepare('UPDATE users SET language = ? WHERE id = ?').run(language, req.user.id);
     }
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+    const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
     return ok(res, { user: lib.mapUser(user) });
   }));
 
@@ -49,7 +49,7 @@ function customerRoutes(ctx) {
   // current DB prices via pricing.js; client prices are never trusted.
   router.post('/bookings', lib.requireCustomer, asyncHandler(async (req, res) => {
     const body = req.body || {};
-    const settings = getAllSettings(db);
+    const settings = await getAllSettings(db);
 
     // --- Validate the booking request ---
     const eventType = lib.reqString(body, 'eventType', { max: 100 });
@@ -104,7 +104,7 @@ function customerRoutes(ctx) {
 
     // --- Resolve items + services from the DB (current prices) ---
     const itemPlaceholders = itemIds.map(() => '?').join(',');
-    const itemRows = db
+    const itemRows = await db
       .prepare(`SELECT * FROM food_items WHERE id IN (${itemPlaceholders})`)
       .all(...itemIds);
     if (itemRows.length !== itemIds.length) {
@@ -119,7 +119,7 @@ function customerRoutes(ctx) {
     let serviceRows = [];
     if (serviceIds.length > 0) {
       const svcPlaceholders = serviceIds.map(() => '?').join(',');
-      serviceRows = db
+      serviceRows = await db
         .prepare(`SELECT * FROM services WHERE id IN (${svcPlaceholders})`)
         .all(...serviceIds);
       if (serviceRows.length !== serviceIds.length) {
@@ -162,58 +162,61 @@ function customerRoutes(ctx) {
       settings
     });
 
-    // --- Persist booking + lines in a transaction. Quote numbers are
+    // --- Persist booking + lines atomically (one libsql batch = one
+    // transaction, single round trip to Turso). Quote numbers are
     // sequential per creation year (SJC-<year>-<seq>); on a UNIQUE clash
     // (concurrent bookings) retry with the next sequence number. ---
     const year = new Date().getFullYear();
     let bookingId = null;
     let quoteNumber = null;
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      const countRow = db
+      const countRow = await db
         .prepare("SELECT COUNT(*) AS n FROM bookings WHERE quote_number LIKE ?")
         .get(`SJC-${year}-%`);
       const seq = countRow.n + 1 + attempt;
       quoteNumber = `SJC-${year}-${String(seq).padStart(4, '0')}`;
       bookingId = crypto.randomUUID();
-      try {
-        db.exec('BEGIN IMMEDIATE');
-        db.prepare(
-          `INSERT INTO bookings
+      const statements = [
+        {
+          sql: `INSERT INTO bookings
              (id, quote_number, user_id, customer_name, customer_phone, event_type,
               custom_event_type, event_date, guests, venue_address, landmark, city,
               district, state, pincode, status, food_total, services_total,
               transport_total, service_charge, gst_amount, grand_total,
               tax_rate, service_charge_rate, notes, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending',
-                   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(
-          bookingId, quoteNumber, req.user.id,
-          req.user.name || 'Guest', req.user.phone,
-          eventType, customEventType, eventDate, guests,
-          venueAddress, landmark, city, district, state, pincode,
-          quote.foodTotal, quote.servicesTotal, quote.transportTotal,
-          quote.serviceCharge, quote.gstAmount, quote.grandTotal,
-          quote.taxRate, quote.serviceChargeRate, notes, nowIso()
-        );
-        const insertItem = db.prepare(
-          `INSERT INTO booking_items (booking_id, item_id, item_name, unit_price, qty_is_guests)
-           VALUES (?, ?, ?, ?, 1)`
-        );
-        for (const line of quote.itemLines) {
-          insertItem.run(bookingId, line.itemId, line.itemName, line.unitPrice);
-        }
-        const insertService = db.prepare(
-          `INSERT INTO booking_services (booking_id, service_id, service_name, unit_price, quantity, total)
-           VALUES (?, ?, ?, ?, ?, ?)`
-        );
-        for (const line of quote.serviceLines) {
-          insertService.run(bookingId, line.serviceId, line.serviceName, line.unitPrice, line.quantity, line.total);
-        }
-        db.exec('COMMIT');
+                   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [
+            bookingId, quoteNumber, req.user.id,
+            req.user.name || 'Guest', req.user.phone,
+            eventType, customEventType, eventDate, guests,
+            venueAddress, landmark, city, district, state, pincode,
+            quote.foodTotal, quote.servicesTotal, quote.transportTotal,
+            quote.serviceCharge, quote.gstAmount, quote.grandTotal,
+            quote.taxRate, quote.serviceChargeRate, notes, nowIso()
+          ]
+        },
+        ...quote.itemLines.map((line) => ({
+          sql: `INSERT INTO booking_items (booking_id, item_id, item_name, unit_price, qty_is_guests)
+                VALUES (?, ?, ?, ?, 1)`,
+          args: [bookingId, line.itemId, line.itemName, line.unitPrice]
+        })),
+        ...quote.serviceLines.map((line) => ({
+          sql: `INSERT INTO booking_services (booking_id, service_id, service_name, unit_price, quantity, total)
+                VALUES (?, ?, ?, ?, ?, ?)`,
+          args: [bookingId, line.serviceId, line.serviceName, line.unitPrice, line.quantity, line.total]
+        }))
+      ];
+      try {
+        await db.batch(statements);
         break;
       } catch (err) {
-        try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
-        if (err.message && err.message.includes('UNIQUE constraint failed') && attempt < 4) {
+        // libsql surfaces the SQLite message ("UNIQUE constraint failed:
+        // bookings.quote_number") and/or a UNIQUE error code.
+        const isUniqueClash =
+          (err.message && err.message.includes('UNIQUE constraint failed')) ||
+          (err.code && String(err.code).includes('UNIQUE'));
+        if (isUniqueClash && attempt < 4) {
           continue; // quote number clash: retry with the next sequence
         }
         throw err;
@@ -223,8 +226,8 @@ function customerRoutes(ctx) {
       throw new Error('Could not allocate a quote number');
     }
 
-    const bookingRow = db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
-    const booking = lib.mapBookingDetail(db, bookingRow);
+    const bookingRow = await db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
+    const booking = await lib.mapBookingDetail(db, bookingRow);
 
     // Notifications never fail the request (notify.js catches internally).
     const notifyResult = await notify.notifyBookingCreated(db, booking, {
@@ -240,12 +243,12 @@ function customerRoutes(ctx) {
   }));
 
   // GET /api/bookings — the caller's own bookings, newest first (summary).
-  router.get('/bookings', lib.requireCustomer, (req, res) => {
-    const rows = db
+  router.get('/bookings', lib.requireCustomer, asyncHandler(async (req, res) => {
+    const rows = await db
       .prepare('SELECT * FROM bookings WHERE user_id = ? ORDER BY created_at DESC')
       .all(req.user.id);
     return ok(res, { bookings: rows.map(lib.mapBookingSummary) });
-  });
+  }));
 
   // GET /api/bookings/:id — own booking only (404 otherwise, so existence
   // is not leaked); admins may view any booking.
@@ -253,10 +256,10 @@ function customerRoutes(ctx) {
     if (!req.user && !req.admin) {
       return lib.fail(res, 401, 'UNAUTHENTICATED', 'Please log in to continue');
     }
-    const row = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
+    const row = await db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
     if (!row) return notFound('Booking not found');
     if (!req.admin && row.user_id !== req.user.id) return notFound('Booking not found');
-    return ok(res, { booking: lib.mapBookingDetail(db, row) });
+    return ok(res, { booking: await lib.mapBookingDetail(db, row) });
   }));
 
   // --- Quotations ----------------------------------------------------------
@@ -267,14 +270,14 @@ function customerRoutes(ctx) {
     if (!req.user && !req.admin) {
       return lib.fail(res, 401, 'UNAUTHENTICATED', 'Please log in to continue');
     }
-    const row = db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
+    const row = await db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
     if (!row) return notFound('Quotation not found');
     if (!req.admin && row.user_id !== req.user.id) return notFound('Quotation not found');
 
-    const booking = lib.mapBookingDetail(db, row);
+    const booking = await lib.mapBookingDetail(db, row);
 
     // Group menu items by category (in menu order) for the receipt layout.
-    const itemRows = db.prepare(
+    const itemRows = await db.prepare(
       `SELECT bi.*, fi.category_id AS category_id, c.name_en AS category_name, c.order_index AS category_order
        FROM booking_items bi
        LEFT JOIN food_items fi ON fi.id = bi.item_id
@@ -303,7 +306,7 @@ function customerRoutes(ctx) {
       booking,
       groupedItems,
       serviceLines: booking.services,
-      business: getAllSettings(db)
+      business: await getAllSettings(db)
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.send(html);
@@ -319,22 +322,22 @@ function customerRoutes(ctx) {
     const comment = lib.reqString(body, 'comment', { max: 1000 });
 
     const id = crypto.randomUUID();
-    db.prepare(
+    await db.prepare(
       `INSERT INTO reviews
          (id, user_id, user_name, rating, event_type, comment, verified, owner_reply, is_visible, created_at)
        VALUES (?, ?, ?, ?, ?, ?, 1, NULL, 1, ?)`
     ).run(id, req.user.id, req.user.name || 'Guest', rating, eventType, comment, nowIso());
-    const row = db.prepare('SELECT * FROM reviews WHERE id = ?').get(id);
+    const row = await db.prepare('SELECT * FROM reviews WHERE id = ?').get(id);
     return ok(res, { review: lib.mapReview(row) }, 201);
   }));
 
   // GET /api/reviews/mine — the caller's own reviews, newest first.
-  router.get('/reviews/mine', lib.requireCustomer, (req, res) => {
-    const rows = db
+  router.get('/reviews/mine', lib.requireCustomer, asyncHandler(async (req, res) => {
+    const rows = await db
       .prepare('SELECT * FROM reviews WHERE user_id = ? ORDER BY created_at DESC')
       .all(req.user.id);
     return ok(res, { reviews: rows.map(lib.mapReview) });
-  });
+  }));
 
   return router;
 }

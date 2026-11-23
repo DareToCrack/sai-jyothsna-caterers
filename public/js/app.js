@@ -9,7 +9,11 @@
  * (transport is cart state: the cart and the booking wizard share one picker.)
  *
  * Routes: #/home #/menu #/booking #/cart #/quotation/:id #/bookings
- *         #/reviews #/settings #/login
+ *         #/reviews #/settings #/login #/signup #/reset
+ *
+ * Login methods (see GET /api/auth/methods): email + password (always),
+ * Google Sign-In (when configured), mobile OTP (only when an SMS/WhatsApp
+ * provider is configured). The login view only shows the available ones.
  */
 'use strict';
 
@@ -62,6 +66,32 @@ function tomorrowISO() {
   const d = new Date();
   d.setDate(d.getDate() + 1);
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Normalize a user-typed Indian mobile number: strip spaces, dashes and any
+ * other non-digits, then drop a leading +91/91/0 country or trunk prefix so
+ * "98765 01234", "+91 98765-01234" and "09876501234" all become "9876501234".
+ * Returns the digits as-is (possibly too short/long) when no prefix applies —
+ * callers still validate against /^[6-9][0-9]{9}$/.
+ */
+function normalizePhone(raw) {
+  let digits = String(raw || '').replace(/[^0-9]/g, '');
+  if (digits.length > 10) {
+    if (digits.startsWith('91')) digits = digits.slice(2);
+    else if (digits.startsWith('0')) digits = digits.slice(1);
+  }
+  return digits;
+}
+
+/** Keep an input digits-only: strips letters, spaces and symbols as typed or pasted. */
+function attachDigitsOnly(input, maxLen) {
+  if (!input) return;
+  input.addEventListener('input', () => {
+    const limit = maxLen || Number(input.getAttribute('maxlength')) || 10;
+    const clean = input.value.replace(/[^0-9]/g, '').slice(0, limit);
+    if (input.value !== clean) input.value = clean;
+  });
 }
 
 /* ============================== API client ============================== */
@@ -142,8 +172,10 @@ class ApplicationController {
   constructor() {
     this.lang = this.readLang();
     this.darkMode = this.readDarkMode();
-    this.user = null;            // { id, name, phone, language } once logged in
+    this.user = null;            // { id, name, phone, email, authProvider, language } once logged in
     this.authChecked = false;
+    this.authMethods = null;     // { password, google, otp, passwordReset } from /api/auth/methods
+    this.authMethodsPromise = null;
     this.business = null;        // /api/business payload
     this.categories = [];        // /api/menu categories (each with items[])
     this.services = [];          // /api/services
@@ -430,6 +462,8 @@ class ApplicationController {
         case 'reviews': await this.renderReviews(); break;
         case 'settings': await this.renderSettings(); break;
         case 'login': this.renderLogin(); break;
+        case 'signup': this.renderSignup(); break;
+        case 'reset': this.renderResetPassword(); break;
         default:
           location.hash = '#/home';
           return;
@@ -450,6 +484,12 @@ class ApplicationController {
   requireLogin(returnHash) {
     this.returnTo = returnHash || ('#/' + (this.currentRoute || 'home'));
     try { sessionStorage.setItem('sjc_return_to', this.returnTo); } catch (e) { /* ignore */ }
+    // Clear the stale in-memory session: renderLogin() redirects back to the
+    // protected route whenever this.user is set, so leaving a dead session
+    // here ping-pongs between #/login and the protected route forever.
+    this.user = null;
+    this.bookingsCache = null;
+    this.updateAuthUI();
     location.hash = '#/login';
   }
 
@@ -920,9 +960,9 @@ class ApplicationController {
         '<div class="form-error" id="' + prefix + '-contact-error"></div>' +
         '<div class="form-row">' +
           '<div class="form-group"><label class="form-label" for="' + prefix + '-contact-name">' + esc(this.t('name_label')) + '</label>' +
-            '<input type="text" id="' + prefix + '-contact-name" class="form-input" value="' + esc(user.name || '') + '" required minlength="3"></div>' +
+            '<input type="text" id="' + prefix + '-contact-name" class="form-input" value="' + esc(user.name || '') + '" placeholder="' + esc(this.t('name_placeholder')) + '" required minlength="3" maxlength="100"></div>' +
           '<div class="form-group"><label class="form-label" for="' + prefix + '-contact-phone">' + esc(this.t('phone_label')) + '</label>' +
-            '<input type="tel" id="' + prefix + '-contact-phone" class="form-input" value="' + esc(user.phone || '') + '" inputmode="numeric" maxlength="10" required></div>' +
+            '<input type="tel" id="' + prefix + '-contact-phone" class="form-input" value="' + esc(user.phone || '') + '" placeholder="' + esc(this.t('phone_placeholder')) + '" inputmode="numeric" required></div>' +
         '</div>' +
         '<div class="form-row">' +
           '<div class="form-group"><label class="form-label" for="' + prefix + '-contact-event-type">' + esc(this.t('event_type_label')) + '</label>' +
@@ -949,6 +989,7 @@ class ApplicationController {
   bindContactForm(prefix) {
     const form = $(prefix + '-contact-form');
     if (!form) return;
+    attachDigitsOnly($(prefix + '-contact-phone'), 12);
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       this.submitInquiry(prefix);
@@ -981,7 +1022,7 @@ class ApplicationController {
 
   async submitInquiry(prefix) {
     const name = $(prefix + '-contact-name').value.trim();
-    const phone = $(prefix + '-contact-phone').value.trim();
+    const phone = normalizePhone($(prefix + '-contact-phone').value);
     const errorEl = $(prefix + '-contact-error');
     const submitBtn = $(prefix + '-contact-submit');
     errorEl.classList.remove('show');
@@ -1001,6 +1042,13 @@ class ApplicationController {
     const payload = { name, phone };
     const eventType = $(prefix + '-contact-event-type').value;
     const eventDate = $(prefix + '-contact-event-date').value;
+    // The date input's min attribute stops the picker, but a typed or pasted
+    // past date still needs rejecting.
+    if (eventDate && eventDate < tomorrowISO()) {
+      errorEl.textContent = this.t('err_future_date');
+      errorEl.classList.add('show');
+      return;
+    }
     const guests = parseInt($(prefix + '-contact-guests').value, 10);
     const message = $(prefix + '-contact-message').value.trim();
     const bookingId = $(prefix + '-contact-booking').value;
@@ -1441,8 +1489,12 @@ class ApplicationController {
     const guestsInput = $('cart-guests-input');
     if (guestsInput) {
       guestsInput.addEventListener('change', () => {
+        const typed = parseInt(guestsInput.value, 10);
         const next = this.setGuests(guestsInput.value);
         guestsInput.value = String(next);
+        if (Number.isFinite(typed) && typed < this.minGuests()) {
+          this.showToast(this.t('err_guests_min').replace('{min}', String(this.minGuests())), 'error');
+        }
         this.renderCart();
       });
     }
@@ -1520,20 +1572,20 @@ class ApplicationController {
           '<h3>' + esc(this.t('step_4_header')) + '</h3>' +
           '<div class="glass-card">' +
             '<div class="form-group"><label class="form-label" for="booking-addr-line">' + esc(this.t('addr_line')) + '</label>' +
-              '<input type="text" id="booking-addr-line" class="form-input" value="' + esc(w.address.line) + '"></div>' +
+              '<input type="text" id="booking-addr-line" class="form-input" value="' + esc(w.address.line) + '" placeholder="' + esc(this.t('addr_line_placeholder')) + '" maxlength="200"></div>' +
             '<div class="form-group"><label class="form-label" for="booking-landmark">' + esc(this.t('landmark')) + '</label>' +
-              '<input type="text" id="booking-landmark" class="form-input" value="' + esc(w.address.landmark) + '"></div>' +
+              '<input type="text" id="booking-landmark" class="form-input" value="' + esc(w.address.landmark) + '" placeholder="' + esc(this.t('landmark_placeholder')) + '" maxlength="100"></div>' +
             '<div class="form-row">' +
               '<div class="form-group"><label class="form-label" for="booking-city">' + esc(this.t('city')) + '</label>' +
-                '<input type="text" id="booking-city" class="form-input" value="' + esc(w.address.city) + '"></div>' +
+                '<input type="text" id="booking-city" class="form-input" value="' + esc(w.address.city) + '" placeholder="' + esc(this.t('city_placeholder')) + '" maxlength="60"></div>' +
               '<div class="form-group"><label class="form-label" for="booking-district">' + esc(this.t('district')) + '</label>' +
-                '<input type="text" id="booking-district" class="form-input" value="' + esc(w.address.district) + '"></div>' +
+                '<input type="text" id="booking-district" class="form-input" value="' + esc(w.address.district) + '" placeholder="' + esc(this.t('district_placeholder')) + '" maxlength="60"></div>' +
             '</div>' +
             '<div class="form-row">' +
               '<div class="form-group"><label class="form-label" for="booking-state">' + esc(this.t('state')) + '</label>' +
-                '<input type="text" id="booking-state" class="form-input" value="' + esc(w.address.state) + '"></div>' +
+                '<input type="text" id="booking-state" class="form-input" value="' + esc(w.address.state) + '" placeholder="' + esc(this.t('state_placeholder')) + '" maxlength="60"></div>' +
               '<div class="form-group"><label class="form-label" for="booking-pincode">' + esc(this.t('pincode')) + '</label>' +
-                '<input type="text" id="booking-pincode" class="form-input" inputmode="numeric" maxlength="6" value="' + esc(w.address.pincode) + '"></div>' +
+                '<input type="text" id="booking-pincode" class="form-input" inputmode="numeric" maxlength="6" value="' + esc(w.address.pincode) + '" placeholder="' + esc(this.t('pincode_placeholder')) + '"></div>' +
             '</div>' +
             '<div class="error-msg" id="booking-address-error">' + esc(this.t('err_address')) + '</div>' +
           '</div>' +
@@ -1575,8 +1627,12 @@ class ApplicationController {
     const guestsInput = $('booking-guests');
     if (guestsInput) {
       guestsInput.addEventListener('change', () => {
+        const typed = parseInt(guestsInput.value, 10);
         const next = this.setGuests(guestsInput.value);
         guestsInput.value = String(next);
+        if (Number.isFinite(typed) && typed < this.minGuests()) {
+          this.showToast(this.t('err_guests_min').replace('{min}', String(this.minGuests())), 'error');
+        }
         this.renderWizardSummary();
       });
     }
@@ -1584,6 +1640,7 @@ class ApplicationController {
     if (customInput) customInput.addEventListener('input', () => { this.wizard.customFunction = customInput.value; });
     const notesInput = $('booking-notes');
     if (notesInput) notesInput.addEventListener('input', () => { this.wizard.notes = notesInput.value; });
+    attachDigitsOnly($('booking-pincode'), 6);
 
     this.renderWizardStep();
   }
@@ -2215,7 +2272,7 @@ class ApplicationController {
     const submitBtn = $('review-submit-btn');
     if (errorEl) { errorEl.classList.remove('show'); errorEl.textContent = ''; }
     if (!comment) {
-      if (errorEl) { errorEl.textContent = this.t('review_comment_label'); errorEl.classList.add('show'); }
+      if (errorEl) { errorEl.textContent = this.t('err_review_comment'); errorEl.classList.add('show'); }
       return;
     }
     if (submitBtn) submitBtn.disabled = true;
@@ -2266,15 +2323,23 @@ class ApplicationController {
         '<div class="glass-card profile-card">' +
           '<i class="fa-solid fa-circle-user"></i>' +
           '<div><h3 style="font-size:18px;">' + esc(profile.name || '') + '</h3>' +
-          '<p class="muted" style="font-size:14px;">+91 ' + esc(profile.phone || '') + '</p></div>' +
+          // Email/password and Google accounts have no phone: show the
+          // email instead of a dangling "+91 ".
+          '<p class="muted" style="font-size:14px;">' + (profile.phone ? '+91 ' + esc(profile.phone) : esc(profile.email || '')) + '</p></div>' +
         '</div>' +
         '<form id="settings-form" class="card" novalidate style="margin-bottom:20px;">' +
           '<div class="form-error" id="settings-error"></div>' +
           '<div class="form-success" id="settings-success"></div>' +
           '<div class="form-group"><label class="form-label" for="settings-name">' + esc(this.t('name_label')) + '</label>' +
             '<input type="text" id="settings-name" class="form-input" value="' + esc(profile.name || '') + '" minlength="3" required></div>' +
-          '<div class="form-group"><label class="form-label" for="settings-phone">' + esc(this.t('phone_label')) + '</label>' +
-            '<input type="tel" id="settings-phone" class="form-input" value="' + esc(profile.phone || '') + '" readonly></div>' +
+          (profile.email
+            ? '<div class="form-group"><label class="form-label" for="settings-email">' + esc(this.t('email_label')) + '</label>' +
+              '<input type="email" id="settings-email" class="form-input" value="' + esc(profile.email) + '" readonly></div>'
+            : '') +
+          (profile.phone
+            ? '<div class="form-group"><label class="form-label" for="settings-phone">' + esc(this.t('phone_label')) + '</label>' +
+              '<input type="tel" id="settings-phone" class="form-input" value="' + esc(profile.phone) + '" readonly></div>'
+            : '') +
           '<button type="submit" class="btn btn-primary" id="settings-save-btn"><i class="fa-solid fa-floppy-disk"></i> ' + esc(this.t('save_profile_btn')) + '</button>' +
         '</form>' +
         '<div class="settings-list">' +
@@ -2336,12 +2401,55 @@ class ApplicationController {
     }
   }
 
-  /* ---------------- login / OTP view ---------------- */
+  /* ---------------- login / signup / reset views ---------------- */
 
-  renderLogin() {
+  /**
+   * Which login methods the server actually offers (cached after the first
+   * fetch). Falls back to password + OTP if the check itself fails, so a
+   * hiccup never locks anyone out of the login screen.
+   */
+  async fetchAuthMethods() {
+    if (this.authMethods) return this.authMethods;
+    if (!this.authMethodsPromise) {
+      this.authMethodsPromise = api('/api/auth/methods')
+        .then((data) => {
+          this.authMethods = {
+            password: data.password !== false,
+            google: !!data.google,
+            otp: !!data.otp,
+            passwordReset: !!data.passwordReset
+          };
+          return this.authMethods;
+        })
+        .catch(() => {
+          this.authMethods = { password: true, google: false, otp: true, passwordReset: false };
+          return this.authMethods;
+        });
+    }
+    return this.authMethodsPromise;
+  }
+
+  /** Show one login step, hide the other three. */
+  showLoginStep(stepId) {
+    ['login-step-password', 'login-step-forgot', 'login-step-profile', 'login-step-otp']
+      .forEach((id) => {
+        const el = $(id);
+        if (el) el.style.display = (id === stepId) ? '' : 'none';
+      });
+    this.hideLoginError();
+  }
+
+  async renderLogin() {
     const view = $('view');
     if (this.user) {
       location.hash = this.consumeReturnTo();
+      return;
+    }
+    view.innerHTML = this.loadingStateHTML();
+    const methods = await this.fetchAuthMethods();
+    // The user may have navigated away (or logged in) while we fetched.
+    if (this.currentRoute !== 'login' || this.user) {
+      if (this.user) location.hash = this.consumeReturnTo();
       return;
     }
     view.innerHTML =
@@ -2353,17 +2461,52 @@ class ApplicationController {
         '</div>' +
         '<div class="glass-card">' +
           '<div class="form-error" id="login-error"></div>' +
-          // Step 1: name + phone
-          '<div id="login-step-profile">' +
+          // Step 1: email + password (default)
+          '<div id="login-step-password">' +
+            '<div class="form-group"><label class="form-label" for="login-email">' + esc(this.t('email_label')) + '</label>' +
+              '<input type="email" id="login-email" class="form-input" placeholder="' + esc(this.t('email_placeholder')) + '" autocomplete="email" maxlength="254" required>' +
+              '<div class="error-msg" id="login-email-error">' + esc(this.t('err_email')) + '</div></div>' +
+            '<div class="form-group"><label class="form-label" for="login-password">' + esc(this.t('password_label')) + '</label>' +
+              '<input type="password" id="login-password" class="form-input" placeholder="' + esc(this.t('password_placeholder')) + '" autocomplete="current-password" maxlength="200" required>' +
+              '<div class="error-msg" id="login-password-error">' + esc(this.t('err_password_required')) + '</div></div>' +
+            '<button type="button" class="btn btn-primary btn-block" id="btn-login-password"><i class="fa-solid fa-right-to-bracket"></i> ' + esc(this.t('login_btn')) + '</button>' +
+            (methods.passwordReset
+              ? '<div class="auth-links"><button type="button" class="link-btn" id="btn-show-forgot">' + esc(this.t('forgot_password_link')) + '</button></div>'
+              : '') +
+            (methods.google
+              ? '<div class="auth-divider">' + esc(this.t('or_divider')) + '</div>' +
+                '<a href="/api/auth/google" class="btn btn-google btn-block"><i class="fa-brands fa-google"></i> ' + esc(this.t('google_login_btn')) + '</a>'
+              : '') +
+            (methods.otp
+              ? '<div class="auth-divider">' + esc(this.t('or_divider')) + '</div>' +
+                '<button type="button" class="btn btn-secondary btn-block" id="btn-show-otp"><i class="fa-solid fa-mobile-screen"></i> ' + esc(this.t('login_with_otp_btn')) + '</button>'
+              : '') +
+            '<div class="auth-links"><a href="#/signup" class="text-link-inline">' + esc(this.t('create_account_link')) + '</a></div>' +
+          '</div>' +
+          // Step 2: forgot password
+          '<div id="login-step-forgot" style="display:none;">' +
+            '<h3 class="text-center" style="font-size:18px;margin-bottom:6px;">' + esc(this.t('forgot_title')) + '</h3>' +
+            '<p class="text-center muted" style="font-size:13px;margin-bottom:16px;">' + esc(this.t('forgot_sub')) + '</p>' +
+            '<div class="form-success" id="forgot-success"></div>' +
+            '<div class="form-group"><label class="form-label" for="forgot-email">' + esc(this.t('email_label')) + '</label>' +
+              '<input type="email" id="forgot-email" class="form-input" placeholder="' + esc(this.t('email_placeholder')) + '" autocomplete="email" maxlength="254" required>' +
+              '<div class="error-msg" id="forgot-email-error">' + esc(this.t('err_email')) + '</div></div>' +
+            '<button type="button" class="btn btn-primary btn-block" id="btn-forgot-send"><i class="fa-solid fa-paper-plane"></i> ' + esc(this.t('forgot_send_btn')) + '</button>' +
+            '<button type="button" class="text-link" id="btn-forgot-back"><i class="fa-solid fa-arrow-left"></i> ' + esc(this.t('back_to_login_link')) + '</button>' +
+          '</div>' +
+          // Step 3: OTP — name + phone (only offered when an OTP provider
+          // is configured; hidden until the user picks "Login with OTP").
+          '<div id="login-step-profile" style="display:none;">' +
             '<div class="form-group"><label class="form-label" for="login-name">' + esc(this.t('name_label')) + '</label>' +
-              '<input type="text" id="login-name" class="form-input" placeholder="' + esc(this.t('name_placeholder')) + '" minlength="3" required>' +
+              '<input type="text" id="login-name" class="form-input" placeholder="' + esc(this.t('name_placeholder')) + '" minlength="3" maxlength="100" required>' +
               '<div class="error-msg" id="login-name-error">' + esc(this.t('err_name')) + '</div></div>' +
             '<div class="form-group"><label class="form-label" for="login-phone">' + esc(this.t('phone_label')) + '</label>' +
-              '<input type="tel" id="login-phone" class="form-input" placeholder="' + esc(this.t('phone_placeholder')) + '" inputmode="numeric" maxlength="10" required>' +
+              '<input type="tel" id="login-phone" class="form-input" placeholder="' + esc(this.t('phone_placeholder')) + '" inputmode="numeric" required>' +
               '<div class="error-msg" id="login-phone-error">' + esc(this.t('err_phone')) + '</div></div>' +
             '<button type="button" class="btn btn-primary btn-block" id="btn-send-otp"><i class="fa-solid fa-paper-plane"></i> ' + esc(this.t('send_otp_btn')) + '</button>' +
+            '<button type="button" class="text-link" id="btn-back-to-password"><i class="fa-solid fa-arrow-left"></i> ' + esc(this.t('back_to_email_login')) + '</button>' +
           '</div>' +
-          // Step 2: 6-digit OTP
+          // Step 4: 6-digit OTP
           '<div id="login-step-otp" style="display:none;">' +
             '<p class="text-center muted" style="font-size:13px;">' + esc(this.t('otp_subtitle')) +
               ' <strong id="otp-target-number">+91 XXXXXXXXXX</strong></p>' +
@@ -2382,10 +2525,28 @@ class ApplicationController {
         '<a href="#/home" class="text-link">' + esc(this.t('continue_guest_btn')) + ' <i class="fa-solid fa-arrow-right"></i></a>' +
       '</div></div>';
 
+    // Password login.
+    $('btn-login-password').addEventListener('click', () => this.loginWithPassword());
+    $('login-email').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.loginWithPassword(); });
+    $('login-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.loginWithPassword(); });
+    const showForgot = $('btn-show-forgot');
+    if (showForgot) showForgot.addEventListener('click', () => this.showLoginStep('login-step-forgot'));
+    const showOtp = $('btn-show-otp');
+    if (showOtp) showOtp.addEventListener('click', () => this.showLoginStep('login-step-profile'));
+    // Forgot password.
+    $('btn-forgot-send').addEventListener('click', () => this.forgotPassword());
+    $('forgot-email').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.forgotPassword(); });
+    $('btn-forgot-back').addEventListener('click', () => this.showLoginStep('login-step-password'));
+    // OTP login (unchanged flow, now behind the "Login with OTP" button).
     $('btn-send-otp').addEventListener('click', () => this.requestOtp());
     $('btn-resend-otp').addEventListener('click', () => this.requestOtp(true));
     $('btn-verify-otp').addEventListener('click', () => this.verifyOtp());
     $('btn-change-phone').addEventListener('click', () => this.resetLoginFlow());
+    $('btn-back-to-password').addEventListener('click', () => this.showLoginStep('login-step-password'));
+    // No maxlength attribute on purpose: it would truncate a pasted "+91 …"
+    // number before the filter sees it. The filter caps at 12 digits (a 91
+    // prefix + 10 digits) and requestOtp() normalizes to 10 on submit.
+    attachDigitsOnly($('login-phone'), 12);
     $('login-phone').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.requestOtp(); });
     $('login-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.requestOtp(); });
 
@@ -2411,6 +2572,12 @@ class ApplicationController {
         else if (text.length) $('otp-' + Math.min(text.length + 1, 6)).focus();
       });
     }
+
+    // Google Sign-In redirects back here with ?google=denied (user
+    // cancelled at Google) or ?google=error (anything else failed).
+    const { query } = this.parseRoute();
+    if (query.google === 'denied') this.showLoginError(this.t('google_denied_msg'));
+    else if (query.google === 'error') this.showLoginError(this.t('google_error_msg'));
   }
 
   showLoginError(message) {
@@ -2432,7 +2599,10 @@ class ApplicationController {
     const nameErr = $('login-name-error');
     const phoneErr = $('login-phone-error');
     const name = nameInput ? nameInput.value.trim() : this.otpName || '';
-    const phone = phoneInput ? phoneInput.value.trim() : this.otpPhone || '';
+    // Normalize pasted/typed numbers ("+91 98765 01234", "09876501234") before
+    // validating, so a real number is never rejected for its formatting.
+    const phone = normalizePhone(phoneInput ? phoneInput.value : this.otpPhone || '');
+    if (phoneInput && phoneInput.value !== phone) phoneInput.value = phone;
     let valid = true;
     if (name.length < 3) { if (nameErr) nameErr.classList.add('show'); valid = false; }
     else if (nameErr) nameErr.classList.remove('show');
@@ -2535,6 +2705,257 @@ class ApplicationController {
       }
     } finally {
       if (verifyBtn) verifyBtn.disabled = false;
+    }
+  }
+
+  async loginWithPassword() {
+    this.hideLoginError();
+    const emailInput = $('login-email');
+    const passwordInput = $('login-password');
+    const emailErr = $('login-email-error');
+    const passwordErr = $('login-password-error');
+    const email = emailInput ? emailInput.value.trim().toLowerCase() : '';
+    const password = passwordInput ? passwordInput.value : '';
+    let valid = true;
+    if (!/^\S+@\S+\.\S+$/.test(email)) { if (emailErr) emailErr.classList.add('show'); valid = false; }
+    else if (emailErr) emailErr.classList.remove('show');
+    if (!password) { if (passwordErr) passwordErr.classList.add('show'); valid = false; }
+    else if (passwordErr) passwordErr.classList.remove('show');
+    if (!valid) return;
+
+    const btn = $('btn-login-password');
+    if (btn) btn.disabled = true;
+    try {
+      const data = await api('/api/auth/login', { method: 'POST', body: { email, password } });
+      this.user = data.user || null;
+      this.updateAuthUI();
+      this.showToast(this.t('login_success_msg'), 'success');
+      location.hash = this.consumeReturnTo();
+    } catch (e) {
+      // Any 401 from /api/auth/login means bad credentials (the server
+      // deliberately returns one generic message for unknown email, wrong
+      // password and Google-only accounts alike).
+      if (e.status === 401) this.showLoginError(this.t('err_invalid_login'));
+      else this.showLoginError(e.message || this.t('error_loading_msg'));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async forgotPassword() {
+    this.hideLoginError();
+    const emailInput = $('forgot-email');
+    const emailErr = $('forgot-email-error');
+    const successEl = $('forgot-success');
+    const email = emailInput ? emailInput.value.trim().toLowerCase() : '';
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      if (emailErr) emailErr.classList.add('show');
+      return;
+    }
+    if (emailErr) emailErr.classList.remove('show');
+    if (successEl) successEl.classList.remove('show');
+    const btn = $('btn-forgot-send');
+    if (btn) btn.disabled = true;
+    try {
+      // The server always returns success here (it must not reveal which
+      // emails have accounts), so the message below is shown either way.
+      await api('/api/auth/forgot-password', { method: 'POST', body: { email } });
+      if (successEl) {
+        successEl.textContent = this.t('forgot_sent_msg');
+        successEl.classList.add('show');
+      }
+    } catch (e) {
+      this.showLoginError(e.message || this.t('error_loading_msg'));
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  /* ---------------- signup view ---------------- */
+
+  renderSignup() {
+    const view = $('view');
+    if (this.user) {
+      location.hash = this.consumeReturnTo();
+      return;
+    }
+    view.innerHTML =
+      '<div class="container page"><div class="auth-wrap">' +
+        '<div class="text-center" style="margin-bottom:20px;">' +
+          '<img src="assets/logo.jpg" alt="Sai Jyothsna logo" class="auth-logo">' +
+          '<h1 class="page-title" style="font-size:26px;">' + esc(this.t('signup_title')) + '</h1>' +
+          '<p class="muted" style="font-size:14px;">' + esc(this.t('signup_sub')) + '</p>' +
+        '</div>' +
+        '<div class="glass-card">' +
+          '<div class="form-error" id="signup-error"></div>' +
+          '<div class="form-group"><label class="form-label" for="signup-name">' + esc(this.t('name_label')) + '</label>' +
+            '<input type="text" id="signup-name" class="form-input" placeholder="' + esc(this.t('name_placeholder')) + '" minlength="3" maxlength="100" autocomplete="name" required>' +
+            '<div class="error-msg" id="signup-name-error">' + esc(this.t('err_name')) + '</div></div>' +
+          '<div class="form-group"><label class="form-label" for="signup-email">' + esc(this.t('email_label')) + '</label>' +
+            '<input type="email" id="signup-email" class="form-input" placeholder="' + esc(this.t('email_placeholder')) + '" autocomplete="email" maxlength="254" required>' +
+            '<div class="error-msg" id="signup-email-error">' + esc(this.t('err_email')) + '</div></div>' +
+          '<div class="form-group"><label class="form-label" for="signup-password">' + esc(this.t('password_label')) + '</label>' +
+            '<input type="password" id="signup-password" class="form-input" placeholder="' + esc(this.t('password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+            '<div class="form-hint">' + esc(this.t('password_hint')) + '</div>' +
+            '<div class="error-msg" id="signup-password-error">' + esc(this.t('err_password')) + '</div></div>' +
+          '<div class="form-group"><label class="form-label" for="signup-confirm">' + esc(this.t('confirm_password_label')) + '</label>' +
+            '<input type="password" id="signup-confirm" class="form-input" placeholder="' + esc(this.t('confirm_password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+            '<div class="error-msg" id="signup-confirm-error">' + esc(this.t('err_password_match')) + '</div></div>' +
+          '<button type="button" class="btn btn-primary btn-block" id="btn-signup"><i class="fa-solid fa-user-plus"></i> ' + esc(this.t('signup_btn')) + '</button>' +
+          '<div class="auth-links"><a href="#/login" class="text-link-inline">' + esc(this.t('have_account_link')) + '</a></div>' +
+        '</div>' +
+        '<a href="#/home" class="text-link">' + esc(this.t('continue_guest_btn')) + ' <i class="fa-solid fa-arrow-right"></i></a>' +
+      '</div></div>';
+
+    $('btn-signup').addEventListener('click', () => this.signup());
+    ['signup-name', 'signup-email', 'signup-password', 'signup-confirm'].forEach((id) => {
+      const el = $(id);
+      if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.signup(); });
+    });
+  }
+
+  /** Client-side mirror of the server password rule. */
+  isStrongPassword(password) {
+    return typeof password === 'string'
+      && password.length >= 8
+      && /[A-Z]/.test(password)
+      && /[a-z]/.test(password)
+      && /[0-9]/.test(password);
+  }
+
+  async signup() {
+    const errorEl = $('signup-error');
+    if (errorEl) errorEl.classList.remove('show');
+    const name = $('signup-name') ? $('signup-name').value.trim() : '';
+    const email = $('signup-email') ? $('signup-email').value.trim().toLowerCase() : '';
+    const password = $('signup-password') ? $('signup-password').value : '';
+    const confirm = $('signup-confirm') ? $('signup-confirm').value : '';
+    const nameErr = $('signup-name-error');
+    const emailErr = $('signup-email-error');
+    const passwordErr = $('signup-password-error');
+    const confirmErr = $('signup-confirm-error');
+    let valid = true;
+    if (name.length < 3) { if (nameErr) nameErr.classList.add('show'); valid = false; }
+    else if (nameErr) nameErr.classList.remove('show');
+    if (!/^\S+@\S+\.\S+$/.test(email)) { if (emailErr) emailErr.classList.add('show'); valid = false; }
+    else if (emailErr) emailErr.classList.remove('show');
+    if (!this.isStrongPassword(password)) { if (passwordErr) passwordErr.classList.add('show'); valid = false; }
+    else if (passwordErr) passwordErr.classList.remove('show');
+    if (!confirm || confirm !== password) { if (confirmErr) confirmErr.classList.add('show'); valid = false; }
+    else if (confirmErr) confirmErr.classList.remove('show');
+    if (!valid) return;
+
+    const btn = $('btn-signup');
+    if (btn) btn.disabled = true;
+    try {
+      const data = await api('/api/auth/signup', {
+        method: 'POST',
+        body: { name, email, password, confirmPassword: confirm }
+      });
+      this.user = data.user || null;
+      this.updateAuthUI();
+      this.showToast(this.t('signup_success_msg'), 'success');
+      location.hash = this.consumeReturnTo();
+    } catch (e) {
+      if (errorEl) {
+        errorEl.textContent = e.code === 'EMAIL_EXISTS'
+          ? this.t('err_email_exists')
+          : (e.message || this.t('error_loading_msg'));
+        errorEl.classList.add('show');
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  /* ---------------- reset-password view ---------------- */
+
+  renderResetPassword() {
+    const view = $('view');
+    const { query } = this.parseRoute();
+    const token = query.token || '';
+    view.innerHTML =
+      '<div class="container page"><div class="auth-wrap">' +
+        '<div class="text-center" style="margin-bottom:20px;">' +
+          '<img src="assets/logo.jpg" alt="Sai Jyothsna logo" class="auth-logo">' +
+          '<h1 class="page-title" style="font-size:26px;">' + esc(this.t('reset_title')) + '</h1>' +
+          '<p class="muted" style="font-size:14px;">' + esc(this.t('reset_sub')) + '</p>' +
+        '</div>' +
+        '<div class="glass-card">' +
+          '<div class="form-error" id="reset-error"></div>' +
+          '<div class="form-success" id="reset-success"></div>' +
+          '<div id="reset-form-wrap">' +
+            '<div class="form-group"><label class="form-label" for="reset-password">' + esc(this.t('new_password_label')) + '</label>' +
+              '<input type="password" id="reset-password" class="form-input" placeholder="' + esc(this.t('new_password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+              '<div class="form-hint">' + esc(this.t('password_hint')) + '</div>' +
+              '<div class="error-msg" id="reset-password-error">' + esc(this.t('err_password')) + '</div></div>' +
+            '<div class="form-group"><label class="form-label" for="reset-confirm">' + esc(this.t('confirm_password_label')) + '</label>' +
+              '<input type="password" id="reset-confirm" class="form-input" placeholder="' + esc(this.t('confirm_password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+              '<div class="error-msg" id="reset-confirm-error">' + esc(this.t('err_password_match')) + '</div></div>' +
+            '<button type="button" class="btn btn-primary btn-block" id="btn-reset-password"><i class="fa-solid fa-key"></i> ' + esc(this.t('reset_btn')) + '</button>' +
+          '</div>' +
+          '<div id="reset-done" style="display:none;" class="text-center">' +
+            '<a href="#/login" class="btn btn-primary btn-block">' + esc(this.t('login_btn')) + '</a>' +
+          '</div>' +
+        '</div>' +
+      '</div></div>';
+
+    if (!token) {
+      const errorEl = $('reset-error');
+      if (errorEl) { errorEl.textContent = this.t('reset_invalid_msg'); errorEl.classList.add('show'); }
+      const wrap = $('reset-form-wrap');
+      if (wrap) wrap.style.display = 'none';
+      return;
+    }
+    this.resetToken = token;
+    $('btn-reset-password').addEventListener('click', () => this.resetPassword());
+    ['reset-password', 'reset-confirm'].forEach((id) => {
+      const el = $(id);
+      if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.resetPassword(); });
+    });
+  }
+
+  async resetPassword() {
+    const errorEl = $('reset-error');
+    const successEl = $('reset-success');
+    if (errorEl) errorEl.classList.remove('show');
+    if (successEl) successEl.classList.remove('show');
+    const newPassword = $('reset-password') ? $('reset-password').value : '';
+    const confirm = $('reset-confirm') ? $('reset-confirm').value : '';
+    const passwordErr = $('reset-password-error');
+    const confirmErr = $('reset-confirm-error');
+    let valid = true;
+    if (!this.isStrongPassword(newPassword)) { if (passwordErr) passwordErr.classList.add('show'); valid = false; }
+    else if (passwordErr) passwordErr.classList.remove('show');
+    if (!confirm || confirm !== newPassword) { if (confirmErr) confirmErr.classList.add('show'); valid = false; }
+    else if (confirmErr) confirmErr.classList.remove('show');
+    if (!valid) return;
+
+    const btn = $('btn-reset-password');
+    if (btn) btn.disabled = true;
+    try {
+      await api('/api/auth/reset-password', {
+        method: 'POST',
+        body: { token: this.resetToken, newPassword, confirmPassword: confirm }
+      });
+      this.resetToken = null;
+      const wrap = $('reset-form-wrap');
+      if (wrap) wrap.style.display = 'none';
+      const done = $('reset-done');
+      if (done) done.style.display = '';
+      if (successEl) {
+        successEl.textContent = this.t('reset_success_msg');
+        successEl.classList.add('show');
+      }
+    } catch (e) {
+      if (errorEl) {
+        errorEl.textContent = e.code === 'INVALID_RESET_TOKEN'
+          ? this.t('reset_invalid_msg')
+          : (e.message || this.t('error_loading_msg'));
+        errorEl.classList.add('show');
+      }
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
 

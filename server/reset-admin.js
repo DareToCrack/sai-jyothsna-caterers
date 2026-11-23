@@ -28,7 +28,7 @@ function parseArgs(argv) {
   return args;
 }
 
-function main() {
+async function main() {
   const cli = parseArgs(process.argv.slice(2));
   const email = (cli.email || process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL).toLowerCase();
   const password = cli.password || process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
@@ -38,19 +38,19 @@ function main() {
     process.exit(1);
   }
 
-  const db = openDb();
+  const db = await openDb();
   try {
     const passwordHash = bcrypt.hashSync(password, 12);
-    const existing = db.prepare('SELECT id FROM admin_users WHERE email = ?').get(email);
+    const existing = await db.prepare('SELECT id FROM admin_users WHERE email = ?').get(email);
     if (existing) {
-      db.prepare(
+      await db.prepare(
         'UPDATE admin_users SET password_hash = ?, must_change_password = 1 WHERE id = ?'
       ).run(passwordHash, existing.id);
       // NOTE: sessions are stateless signed tokens (see lib.js), so tokens
       // issued before this reset stay valid until their 8-hour expiry.
       console.log(`Admin password reset for ${email}. The admin must change it on next login.`);
     } else {
-      db.prepare(
+      await db.prepare(
         `INSERT INTO admin_users (id, email, password_hash, name, role, must_change_password, created_at)
          VALUES (?, ?, ?, ?, 'admin', 1, ?)`
       ).run(crypto.randomUUID(), email, passwordHash, 'Admin', nowIso());
@@ -62,7 +62,10 @@ function main() {
 }
 
 if (require.main === module) {
-  main();
+  main().catch((err) => {
+    console.error('Admin reset failed:', err);
+    process.exit(1);
+  });
 }
 
 module.exports = { main };

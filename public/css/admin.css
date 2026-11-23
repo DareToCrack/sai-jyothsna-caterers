@@ -77,6 +77,11 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   border-color: var(--secondary);
   box-shadow: 0 0 0 3px rgba(197, 160, 89, 0.18);
 }
+/* Explicit placeholder colour (full opacity) so hint text is readable in
+   every browser instead of relying on the dim browser default. */
+.form-input::placeholder { color: var(--text-muted); opacity: 1; }
+.form-input::-webkit-input-placeholder { color: var(--text-muted); opacity: 1; }
+.form-input::-moz-placeholder { color: var(--text-muted); opacity: 1; }
 textarea.form-input { resize: vertical; }
 select.form-input { appearance: auto; }
 
@@ -650,14 +655,16 @@ select.form-input { appearance: auto; }
   .content { padding: 16px 14px; }
   .topbar { padding: 10px 14px; }
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dash-grid { grid-template-columns: 1fr; }
-  .form-grid { grid-template-columns: 1fr; }
-  .detail-grid { grid-template-columns: 1fr; }
+  /* minmax(0, 1fr): a bare 1fr track has an implicit auto minimum, so the
+     640px-wide dashboard table forced the whole page to overflow on mobile. */
+  .dash-grid { grid-template-columns: minmax(0, 1fr); }
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .detail-grid { grid-template-columns: minmax(0, 1fr); }
   .toolbar-input { max-width: none; }
 }
 
 @media (max-width: 480px) {
-  .stat-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .stat-value { font-size: 20px; }
   .auth-card { padding: 26px 20px; }
   .modal-overlay { padding: 12px 8px; }

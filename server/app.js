@@ -1,13 +1,15 @@
 // app.js — Express app factory.
 //
-// createApp({ dbPath }) opens (and seeds, idempotently) the SQLite database
-// and returns { app, db, close } so tests can start it on an ephemeral port
-// with a temp DB file. server.js uses the same factory for local dev and
-// api/index.js uses it for Vercel serverless (where the DB lives in /tmp
-// and is auto-created + auto-seeded on cold start — seed() is idempotent,
-// INSERT OR IGNORE, so concurrent cold starts can never double-seed).
-// Sessions are stateless HMAC-signed cookies (see lib.js), so no shared
-// session store is needed across serverless instances.
+// createApp({ dbPath }) is async: it opens (and seeds, idempotently) the
+// database — Turso when TURSO_DATABASE_URL is set, otherwise a local
+// SQLite file (see server/db.js) — and returns { app, db, close } so
+// tests can start it on an ephemeral port with a temp DB file. server.js
+// uses the same factory for local dev and api/index.js uses it for Vercel
+// serverless (where the DB is auto-created + auto-seeded on cold start —
+// seed() is idempotent, INSERT OR IGNORE, so concurrent cold starts can
+// never double-seed). Sessions are stateless HMAC-signed cookies (see
+// lib.js), so no shared session store is needed across serverless
+// instances.
 //
 // Rate limiting: express-rate-limit is DISABLED when NODE_ENV=test so the
 // test suite can exercise the API freely. The DB-level OTP limits (60s
@@ -16,6 +18,7 @@
 // them. In every other environment all limiters are active.
 'use strict';
 
+const crypto = require('crypto');
 const path = require('path');
 const express = require('express');
 const helmet = require('helmet');
@@ -37,19 +40,27 @@ function jsonRateLimitHandler(req, res) {
   return lib.fail(res, 429, 'RATE_LIMITED', 'Too many requests, please try again later.');
 }
 
-function createApp(options = {}) {
-  const db = openDb(options.dbPath);
+async function createApp(options = {}) {
+  const db = await openDb(options.dbPath);
   // Idempotent: safe to run on every startup; INSERT OR IGNORE means a
   // re-run changes nothing (and never overwrites admin-edited settings).
-  seed(db, { log: process.env.NODE_ENV !== 'test' });
+  await seed(db, { log: process.env.NODE_ENV !== 'test' });
 
-  // In-memory OTP store for tests ONLY (populated at OTP generation when
-  // NODE_ENV=test; plaintext codes are never persisted in the DB).
+  // In-memory stores for tests ONLY (populated at OTP generation /
+  // password-reset request when NODE_ENV=test; plaintext codes and tokens
+  // are never persisted in the DB).
   const testOtpCodes = new Map();
-  const ctx = { db, testOtpCodes };
+  const testResetTokens = new Map();
+  const ctx = { db, testOtpCodes, testResetTokens };
 
   const app = express();
   app.disable('x-powered-by');
+  // Trust the first proxy (Vercel) so req.protocol / req.ip reflect the
+  // real client: the Google OAuth redirect URI and the password-reset
+  // links must be https on Vercel, and the rate limiter keys on the real
+  // client IP. `1` (not `true`) trusts exactly one hop — express-rate-
+  // limit rejects a fully permissive trust-proxy setting.
+  app.set('trust proxy', 1);
 
   // Security headers. CSP is disabled: the frontend pages served from
   // public/ use inline scripts/styles, which a default CSP would break.
@@ -80,6 +91,11 @@ function createApp(options = {}) {
     });
     app.use('/api/auth/request-otp', authLimiter);
     app.use('/api/auth/verify-otp', authLimiter);
+    app.use('/api/auth/signup', authLimiter);
+    app.use('/api/auth/login', authLimiter);
+    app.use('/api/auth/forgot-password', authLimiter);
+    app.use('/api/auth/reset-password', authLimiter);
+    app.use('/api/auth/google', authLimiter);
 
     const adminLoginLimiter = rateLimit({
       windowMs: 15 * 60 * 1000,
@@ -95,16 +111,43 @@ function createApp(options = {}) {
   app.use(lib.loadSession(db));
   app.use(lib.csrfGuard);
 
+  // --- Keep-alive for the Turso free tier (see vercel.json cron) ---
+  // Free Turso databases are archived after 10 days without activity, so
+  // Vercel pings this endpoint once a day. The SELECT is the activity.
+  // When CRON_SECRET is set (Vercel sets it automatically for cron jobs),
+  // the request must carry `Authorization: Bearer <CRON_SECRET>`; without
+  // it the endpoint is open, so local dev and manual pings still work.
+  app.get('/api/cron/keep-alive', async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret) {
+      const header = req.get('Authorization') || '';
+      const expected = `Bearer ${secret}`;
+      const okHeader = header.length === expected.length &&
+        crypto.timingSafeEqual(Buffer.from(header), Buffer.from(expected));
+      if (!okHeader) {
+        return lib.fail(res, 401, 'UNAUTHENTICATED', 'Invalid cron secret');
+      }
+    }
+    try {
+      await db.prepare('SELECT 1 AS ok').get();
+      return lib.ok(res, { ok: true, dbMode: db.mode });
+    } catch (err) {
+      console.error('keep-alive check failed:', err);
+      return lib.fail(res, 500, 'INTERNAL_ERROR', 'Database check failed');
+    }
+  });
+
   // --- API routes ---
   app.use('/api', publicRoutes(ctx));
   app.use('/api/auth', authRoutes(ctx));
   app.use('/api', customerRoutes(ctx));
   app.use('/api/admin', adminRoutes(ctx));
 
-  // --- Uploaded images (admin item photos). Served through a route — not
-  // express.static — so Vercel's /tmp uploads work exactly like local ones.
-  // Safe content type + traversal rejection live in uploads.serveUpload.
-  app.get('/api/uploads/:name', uploads.serveUpload);
+  // --- Uploaded images (admin item photos), stored as BLOBs in the
+  // database. Served through a route — not express.static — so uploads
+  // work identically in every environment. Safe content type +
+  // traversal rejection live in uploads.serveUpload.
+  app.get('/api/uploads/:name', (req, res) => uploads.serveUpload(db, req, res));
 
   // --- Static frontend (index.html at /, admin.html). On Vercel these
   // files are served statically by Vercel itself and never reach this

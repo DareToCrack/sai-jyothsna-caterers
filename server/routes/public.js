@@ -12,15 +12,15 @@ const notify = require('../notify');
 const { ok, fail, asyncHandler, badRequest, notFound } = lib;
 
 function publicRoutes(ctx) {
-  const { db, testOtpCodes } = ctx;
+  const { db, testOtpCodes, testResetTokens } = ctx;
   const router = express.Router();
 
   // GET /api/menu — active categories with their available items, ordered.
-  router.get('/menu', (req, res) => {
-    const categories = db
+  router.get('/menu', asyncHandler(async (req, res) => {
+    const categories = await db
       .prepare('SELECT * FROM categories WHERE is_active = 1 ORDER BY order_index ASC, name_en ASC')
       .all();
-    const items = db
+    const items = await db
       .prepare('SELECT * FROM food_items WHERE is_available = 1 ORDER BY name_en ASC')
       .all();
     const itemsByCategory = new Map();
@@ -34,19 +34,19 @@ function publicRoutes(ctx) {
         items: itemsByCategory.get(cat.id) || []
       }))
     });
-  });
+  }));
 
   // GET /api/services — available services only.
-  router.get('/services', (req, res) => {
-    const rows = db
+  router.get('/services', asyncHandler(async (req, res) => {
+    const rows = await db
       .prepare('SELECT * FROM services WHERE is_available = 1 ORDER BY name_en ASC')
       .all();
     return ok(res, { services: rows.map(lib.mapService) });
-  });
+  }));
 
   // GET /api/business — public business info. Never secrets.
-  router.get('/business', (req, res) => {
-    const s = getAllSettings(db);
+  router.get('/business', asyncHandler(async (req, res) => {
+    const s = await getAllSettings(db);
     return ok(res, {
       business: {
         name: s.businessName,
@@ -62,11 +62,11 @@ function publicRoutes(ctx) {
         minGuestsForBooking: s.minGuestsForBooking
       }
     });
-  });
+  }));
 
   // GET /api/reviews — visible reviews only, newest first, with stats.
-  router.get('/reviews', (req, res) => {
-    const rows = db
+  router.get('/reviews', asyncHandler(async (req, res) => {
+    const rows = await db
       .prepare('SELECT * FROM reviews WHERE is_visible = 1 ORDER BY created_at DESC')
       .all();
     const counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
@@ -86,27 +86,32 @@ function publicRoutes(ctx) {
       }),
       stats: { average, total: rows.length, counts }
     });
-  });
+  }));
 
   // POST /api/inquiries — logged-in OR guest. A bookingId, when given, must
   // exist and (when logged in) must belong to the caller.
   router.post('/inquiries', asyncHandler(async (req, res) => {
     const body = req.body || {};
     const name = lib.reqString(body, 'name', { max: 100 });
-    const phone = lib.reqString(body, 'phone', { max: 15 });
+    const phone = lib.normalizePhone(lib.reqString(body, 'phone', { max: 20 }));
     if (!lib.isValidPhone(phone)) badRequest('phone must be a valid 10-digit Indian mobile number');
     const email = lib.optString(body, 'email', { max: 254 });
     if (email && !lib.isValidEmail(email)) badRequest('email is invalid');
     const eventType = lib.optString(body, 'eventType', { max: 100 });
     const eventDate = lib.optString(body, 'eventDate', { max: 10 });
     if (eventDate && !lib.isValidDateString(eventDate)) badRequest('eventDate must be YYYY-MM-DD');
+    // A past event date is meaningless for an enquiry (the UI also enforces
+    // min=tomorrow; the server floor is today, UTC, to allow for timezones).
+    if (eventDate && eventDate < new Date().toISOString().slice(0, 10)) {
+      badRequest('eventDate must be today or in the future');
+    }
     const guests = lib.optInt(body, 'guests', { min: 1, max: 100000 });
     const message = lib.optString(body, 'message', { max: 2000 });
     const bookingId = lib.optString(body, 'bookingId', { max: 100 });
 
     let booking = null;
     if (bookingId) {
-      booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
+      booking = await db.prepare('SELECT * FROM bookings WHERE id = ?').get(bookingId);
       if (!booking) badRequest('bookingId does not refer to an existing booking');
       if (req.user && booking.user_id !== req.user.id) {
         // Do not leak whether the booking exists to a non-owner.
@@ -115,7 +120,7 @@ function publicRoutes(ctx) {
     }
 
     const id = crypto.randomUUID();
-    db.prepare(
+    await db.prepare(
       `INSERT INTO inquiries
          (id, user_id, name, phone, email, event_type, event_date, guests, message, booking_id, status, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?)`
@@ -124,7 +129,7 @@ function publicRoutes(ctx) {
       req.user ? req.user.id : null,
       name, phone, email, eventType, eventDate, guests, message, bookingId, nowIso()
     );
-    const row = db.prepare('SELECT * FROM inquiries WHERE id = ?').get(id);
+    const row = await db.prepare('SELECT * FROM inquiries WHERE id = ?').get(id);
     const inquiry = lib.mapInquiry(row);
 
     // Notifications never fail the request (notify.js catches internally).
@@ -148,6 +153,21 @@ function publicRoutes(ctx) {
       return fail(res, 404, 'NOT_FOUND', 'No OTP found for this phone');
     }
     return ok(res, { code: testOtpCodes.get(phone) });
+  });
+
+  // GET /api/__test__/last-reset-token?email= — test-only helper, same
+  // pattern as last-otp: returns the plaintext password-reset token
+  // generated for an email from an in-memory map populated ONLY when
+  // NODE_ENV=test. Tokens are stored SHA-256-hashed in the DB, so the
+  // plaintext is otherwise unrecoverable. In any other environment this
+  // route does not exist (404).
+  router.get('/__test__/last-reset-token', (req, res) => {
+    if (process.env.NODE_ENV !== 'test') return fail(res, 404, 'NOT_FOUND', 'Not found');
+    const email = req.query.email;
+    if (!email || !testResetTokens.has(email)) {
+      return fail(res, 404, 'NOT_FOUND', 'No reset token found for this email');
+    }
+    return ok(res, { token: testResetTokens.get(email) });
   });
 
   return router;

@@ -135,8 +135,37 @@ function isValidPhone(phone) {
   return typeof phone === 'string' && PHONE_RE.test(phone);
 }
 
+/**
+ * Normalize a user-supplied Indian mobile number the same way the frontend
+ * does: strip spaces/dashes/non-digits, then drop a leading +91/91/0 prefix.
+ * "+91 98765 01234", "09876501234" and "9876501234" all become "9876501234".
+ * Callers still validate the result with isValidPhone().
+ */
+function normalizePhone(raw) {
+  let digits = String(raw || '').replace(/[^0-9]/g, '');
+  if (digits.length > 10) {
+    if (digits.startsWith('91')) digits = digits.slice(2);
+    else if (digits.startsWith('0')) digits = digits.slice(1);
+  }
+  return digits;
+}
+
 function isValidEmail(email) {
   return typeof email === 'string' && EMAIL_RE.test(email) && email.length <= 254;
+}
+
+// Password rule for customer signup + password reset: at least 8
+// characters with an uppercase letter, a lowercase letter and a number.
+const PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_RULE_MESSAGE =
+  'Password must be at least 8 characters, with an uppercase letter, a lowercase letter and a number';
+
+function isStrongPassword(password) {
+  return typeof password === 'string'
+    && password.length >= PASSWORD_MIN_LENGTH
+    && /[A-Z]/.test(password)
+    && /[a-z]/.test(password)
+    && /[0-9]/.test(password);
 }
 
 /** Strict YYYY-MM-DD check: format + real calendar date. */
@@ -283,35 +312,44 @@ function clearSessionCookies(res) {
 
 /**
  * Load the session (if any) from the sjc_session cookie: verify the HMAC
- * signature + expiry, then load the user/admin row by id from THIS
- * instance's database and attach req.session plus req.user (customer) or
- * req.admin. On Vercel the database is per-instance, so a customer created
- * on one instance has no row on another — their token verifies, but the
- * request is treated as logged out until they re-verify OTP on that
- * instance (documented demo limitation). The seeded admin id is
- * deterministic (see seed.js), so admin sessions work across instances.
+ * signature + expiry, then load the user/admin row by id from the database
+ * and attach req.session plus req.user (customer) or req.admin. With Turso
+ * configured the database is shared, so sessions work across every
+ * instance. In the Vercel-without-Turso demo mode the database is
+ * per-instance, so a customer created on one instance has no row on
+ * another — their token verifies, but the request is treated as logged
+ * out until they re-verify OTP on that instance (documented demo
+ * limitation). The seeded admin id is deterministic (see seed.js), so
+ * admin sessions work across instances either way.
  */
 function loadSession(db) {
-  return (req, res, next) => {
-    const token = req.cookies && req.cookies.sjc_session;
-    if (!token) return next();
-    const payload = verifyToken(token);
-    if (!payload) return next();
-    const session = {
-      user_type: payload.t,
-      user_id: payload.id,
-      csrf_token: payload.csrf,
-      expires_at: new Date(payload.exp).toISOString()
-    };
-    if (payload.t === 'customer') {
-      req.user = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.id) || null;
-      if (!req.user) return next();
-    } else {
-      req.admin = db.prepare('SELECT * FROM admin_users WHERE id = ?').get(payload.id) || null;
-      if (!req.admin) return next();
+  return async (req, res, next) => {
+    try {
+      const token = req.cookies && req.cookies.sjc_session;
+      if (!token) return next();
+      const payload = verifyToken(token);
+      if (!payload) return next();
+      const session = {
+        user_type: payload.t,
+        user_id: payload.id,
+        csrf_token: payload.csrf,
+        expires_at: new Date(payload.exp).toISOString()
+      };
+      if (payload.t === 'customer') {
+        req.user = await db.prepare('SELECT * FROM users WHERE id = ?').get(payload.id) || null;
+        if (!req.user) return next();
+      } else {
+        req.admin = await db.prepare('SELECT * FROM admin_users WHERE id = ?').get(payload.id) || null;
+        if (!req.admin) return next();
+      }
+      req.session = session;
+      return next();
+    } catch (err) {
+      // A database error while loading the session fails closed to
+      // logged-out rather than breaking the request.
+      console.error('loadSession failed:', err);
+      return next();
     }
-    req.session = session;
-    return next();
   };
 }
 
@@ -370,9 +408,9 @@ function requireAdmin(req, res, next) {
 // Audit logging (admin mutations)
 // ---------------------------------------------------------------------------
 
-function auditLog(db, adminId, action, detail) {
+async function auditLog(db, adminId, action, detail) {
   try {
-    db.prepare(
+    await db.prepare(
       'INSERT INTO audit_logs (admin_id, action, detail, created_at) VALUES (?, ?, ?, ?)'
     ).run(adminId, action, detail === undefined ? null : JSON.stringify(detail), nowIso());
   } catch (err) {
@@ -426,7 +464,15 @@ function mapService(row) {
 }
 
 function mapUser(row) {
-  return { id: row.id, name: row.name, phone: row.phone, language: row.language || 'en' };
+  // Never include password_hash or google_id.
+  return {
+    id: row.id,
+    name: row.name,
+    phone: row.phone || null,
+    email: row.email || null,
+    authProvider: row.auth_provider || 'otp',
+    language: row.language || 'en'
+  };
 }
 
 function mapAdmin(row) {
@@ -490,9 +536,9 @@ function mapBookingSummary(row) {
 }
 
 /** Full booking detail including its item/service lines. */
-function mapBookingDetail(db, row) {
+async function mapBookingDetail(db, row) {
   const booking = mapBooking(row);
-  const itemRows = db
+  const itemRows = await db
     .prepare('SELECT * FROM booking_items WHERE booking_id = ? ORDER BY id')
     .all(row.id);
   booking.items = itemRows.map((item) => ({
@@ -502,7 +548,7 @@ function mapBookingDetail(db, row) {
     qtyIsGuests: item.qty_is_guests === 1,
     lineTotal: item.qty_is_guests === 1 ? item.unit_price * row.guests : item.unit_price
   }));
-  const serviceRows = db
+  const serviceRows = await db
     .prepare('SELECT * FROM booking_services WHERE booking_id = ? ORDER BY id')
     .all(row.id);
   booking.services = serviceRows.map((svc) => ({
@@ -574,6 +620,9 @@ function mapAuditLog(row) {
   return {
     id: row.id,
     adminId: row.admin_id,
+    // admin_email is populated by the audit-logs query's LEFT JOIN; without
+    // it the admin column renders as '—' and nobody can tell who acted.
+    adminEmail: row.admin_email || null,
     action: row.action,
     detail,
     createdAt: row.created_at
@@ -604,7 +653,11 @@ module.exports = {
   reqEnum,
   optBool,
   isValidPhone,
+  normalizePhone,
   isValidEmail,
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_RULE_MESSAGE,
+  isStrongPassword,
   isValidDateString,
   tomorrowDateString,
   createSession,

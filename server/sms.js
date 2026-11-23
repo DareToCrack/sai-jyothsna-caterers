@@ -1,7 +1,10 @@
-// sms.js — SMS provider abstraction for OTP delivery.
+// sms.js — OTP delivery channels.
 //
 // Priority: MSG91 (when MSG91_AUTH_KEY is set) -> Twilio (when TWILIO_SID,
-// TWILIO_TOKEN and TWILIO_FROM are all set) -> dev-log (no provider
+// TWILIO_TOKEN and TWILIO_FROM are all set) -> WhatsApp Cloud API (when
+// WHATSAPP_CLOUD_TOKEN + WHATSAPP_PHONE_NUMBER_ID are set; sends the OTP
+// via an approved AUTHENTICATION template, default name `sjc_otp_code`,
+// overridable with WHATSAPP_OTP_TEMPLATE) -> dev-log (no provider
 // configured: the code is printed to the server console and the API reports
 // devMode: true, so local development still works).
 //
@@ -9,15 +12,18 @@
 // so a provider outage can never break the OTP request endpoint.
 'use strict';
 
+const notify = require('./notify');
+
+const DEFAULT_WHATSAPP_OTP_TEMPLATE = 'sjc_otp_code';
+
 function otpMessage(code) {
   return `Your Sai Jyothsna Caterers OTP is ${code}. Valid for 5 minutes.`;
 }
 
 function isSmsConfigured() {
   if (process.env.MSG91_AUTH_KEY) return true;
-  return Boolean(
-    process.env.TWILIO_SID && process.env.TWILIO_TOKEN && process.env.TWILIO_FROM
-  );
+  if (process.env.TWILIO_SID && process.env.TWILIO_TOKEN && process.env.TWILIO_FROM) return true;
+  return notify.isWhatsappCloudConfigured();
 }
 
 async function sendViaMsg91(phone10, code) {
@@ -65,6 +71,21 @@ async function sendViaTwilio(phone10, code) {
   return { provider: 'twilio', ok: true };
 }
 
+async function sendViaWhatsapp(phone10, code) {
+  const templateName = process.env.WHATSAPP_OTP_TEMPLATE || DEFAULT_WHATSAPP_OTP_TEMPLATE;
+  try {
+    await notify.sendWhatsappTemplate({
+      to: `91${phone10}`,
+      templateName,
+      languageCode: 'en',
+      bodyParams: [code]
+    });
+    return { provider: 'whatsapp', ok: true };
+  } catch (err) {
+    return { provider: 'whatsapp', ok: false, error: err.message };
+  }
+}
+
 /**
  * Send a 6-digit OTP to an Indian 10-digit mobile number.
  * @returns {Promise<{provider: string, ok: boolean, error?: string}>}
@@ -74,6 +95,9 @@ async function sendOtp(phone10, code) {
     if (process.env.MSG91_AUTH_KEY) return await sendViaMsg91(phone10, code);
     if (process.env.TWILIO_SID && process.env.TWILIO_TOKEN && process.env.TWILIO_FROM) {
       return await sendViaTwilio(phone10, code);
+    }
+    if (notify.isWhatsappCloudConfigured()) {
+      return await sendViaWhatsapp(phone10, code);
     }
     // No provider configured: dev mode. The code is only ever written to the
     // server console, never returned to the client.
@@ -86,4 +110,4 @@ async function sendOtp(phone10, code) {
   }
 }
 
-module.exports = { sendOtp, isSmsConfigured, otpMessage };
+module.exports = { sendOtp, isSmsConfigured, otpMessage, DEFAULT_WHATSAPP_OTP_TEMPLATE };

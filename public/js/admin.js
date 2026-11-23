@@ -268,7 +268,7 @@ function setBusy(button, busy, busyLabel) {
 /* ============================== Auth / views ============================== */
 
 function showAuthForm(formId) {
-  ['login-form', 'forgot-form', 'change-password-form'].forEach((id) => {
+  ['login-form', 'forgot-form', 'change-password-form', 'reset-password-form'].forEach((id) => {
     $(id).hidden = id !== formId;
   });
 }
@@ -428,6 +428,58 @@ async function handleChangePassword(event) {
   } catch (err) {
     if (err instanceof ApiError) {
       showInlineError('change-password-error', err.message);
+    }
+  } finally {
+    setBusy(btn, false);
+  }
+}
+
+/** Show the reset form for a link clicked from the reset email (#/reset?token=…). */
+function showResetPassword(token) {
+  state.resetToken = token;
+  $('portal-view').hidden = true;
+  $('auth-view').hidden = false;
+  showAuthForm('reset-password-form');
+  hideAlert('reset-password-error');
+  hideAlert('reset-password-info');
+  $('reset-new-password').value = '';
+  $('reset-confirm-password').value = '';
+  $('reset-new-password').focus();
+}
+
+async function handleResetPassword(event) {
+  event.preventDefault();
+  hideAlert('reset-password-error');
+  hideAlert('reset-password-info');
+  const newPassword = $('reset-new-password').value;
+  const confirm = $('reset-confirm-password').value;
+  if (newPassword.length < 8) {
+    showInlineError('reset-password-error', 'The new password must be at least 8 characters long.');
+    return;
+  }
+  if (newPassword !== confirm) {
+    showInlineError('reset-password-error', 'The new passwords do not match.');
+    return;
+  }
+  const btn = $('reset-password-submit');
+  setBusy(btn, true, 'Resetting password…');
+  try {
+    await api('/api/admin/auth/reset-password', {
+      method: 'POST',
+      body: { token: state.resetToken, newPassword },
+      noAuthRedirect: true,
+    });
+    state.resetToken = null;
+    // Clear the token from the URL so it is not left in browser history.
+    history.replaceState(null, '', location.pathname);
+    showLogin();
+    const info = $('login-info');
+    info.textContent = 'Password reset successfully. Please sign in with your new password.';
+    info.hidden = false;
+    showToast('Password reset successfully.');
+  } catch (err) {
+    if (err instanceof ApiError) {
+      showInlineError('reset-password-error', err.message);
     }
   } finally {
     setBusy(btn, false);
@@ -736,7 +788,7 @@ async function openBookingDetail(id) {
           ${statuses.map((s) => `<option value="${s}"${s === b.status ? ' selected' : ''}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('')}
         </select>
         <label class="form-label" for="booking-notes-input">Notes</label>
-        <textarea id="booking-notes-input" class="form-input" rows="2">${esc(b.notes || '')}</textarea>
+        <textarea id="booking-notes-input" class="form-input" rows="2" placeholder="Internal notes about this booking…">${esc(b.notes || '')}</textarea>
         <button type="button" id="booking-save-btn" class="btn btn-primary" style="margin-top:12px;">Save Changes</button>
       </div>`;
 
@@ -1290,7 +1342,7 @@ async function loadCustomers() {
     } else {
       body.innerHTML = list.map((c) => `<tr>
         <td><strong>${esc(c.name || '—')}</strong></td>
-        <td class="cell-nowrap">${esc(c.phone || '—')}</td>
+        <td class="cell-nowrap">${esc(c.phone || c.email || '—')}</td>
         <td>${esc(num(c.bookingsCount ?? (c.bookings ? c.bookings.length : 0)))}</td>
         <td class="cell-nowrap">${esc(fmtDate(c.lastBookingDate))}</td>
         <td class="cell-actions">
@@ -1815,8 +1867,17 @@ async function loadOutbox() {
 async function resendOutbox(id, btn) {
   if (btn) btn.disabled = true;
   try {
-    await api('/api/admin/outbox/' + encodeURIComponent(id) + '/resend', { method: 'POST' });
-    showToast('Notification queued for resend.');
+    const data = await api('/api/admin/outbox/' + encodeURIComponent(id) + '/resend', { method: 'POST' });
+    // The server returns the real outcome: report a failed resend as failed
+    // (e.g. "SMTP is not configured") instead of claiming success.
+    const result = (data && data.result) || {};
+    if (result.status === 'sent') {
+      showToast('Notification sent.');
+    } else if (result.error) {
+      showToast('Resend failed: ' + result.error, 'error');
+    } else {
+      showToast('Notification could not be sent yet.', 'error');
+    }
     loadOutbox();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
@@ -1870,6 +1931,7 @@ function init() {
   $('login-form').addEventListener('submit', handleLogin);
   $('forgot-form').addEventListener('submit', handleForgotPassword);
   $('change-password-form').addEventListener('submit', handleChangePassword);
+  $('reset-password-form').addEventListener('submit', handleResetPassword);
   $('forgot-password-link').addEventListener('click', () => {
     hideAlert('forgot-error');
     hideAlert('forgot-info');
@@ -1877,6 +1939,10 @@ function init() {
     showAuthForm('forgot-form');
   });
   $('forgot-back-link').addEventListener('click', () => showAuthForm('login-form'));
+  $('reset-back-link').addEventListener('click', () => {
+    history.replaceState(null, '', location.pathname);
+    showAuthForm('login-form');
+  });
   $('logout-btn').addEventListener('click', handleLogout);
 
   // Vercel demo-deployment notice (admin dashboard only): dismissible for
@@ -1896,8 +1962,15 @@ function init() {
   });
   $('sidebar-overlay').addEventListener('click', closeSidebar);
 
-  // Hash-based section switching (back/forward support)
+  // Hash-based section switching (back/forward support). A reset link pasted
+  // into an already-open admin tab only changes the hash (no page reload),
+  // so the reset hash is handled here as well as on first load.
   window.addEventListener('hashchange', () => {
+    const resetMatch = (location.hash || '').match(/^#\/reset\?token=([^&]+)/);
+    if (resetMatch) {
+      showResetPassword(decodeURIComponent(resetMatch[1]));
+      return;
+    }
     if ($('portal-view').hidden) return;
     const name = (location.hash || '').replace(/^#\/?/, '');
     if (SECTION_TITLES[name] && name !== state.section) showSection(name, { updateHash: false });
@@ -1977,8 +2050,15 @@ function init() {
   $('outbox-status-filter').addEventListener('change', loadOutbox);
   $('outbox-refresh').addEventListener('click', loadOutbox);
 
-  // Session check on first load
-  checkSession();
+  // A reset link from the email lands here as #/reset?token=…: show the reset
+  // form instead of the session check (the token is single-use, 1-hour).
+  const resetMatch = (location.hash || '').match(/^#\/reset\?token=([^&]+)/);
+  if (resetMatch) {
+    showResetPassword(decodeURIComponent(resetMatch[1]));
+  } else {
+    // Session check on first load
+    checkSession();
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

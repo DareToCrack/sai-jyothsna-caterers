@@ -171,7 +171,7 @@ function seededAdminId(email) {
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 }
 
-function seed(db, options = {}) {
+async function seed(db, options = {}) {
   const log = options.log !== false;
   const counts = { categories: 0, foodItems: 0, services: 0, reviews: 0, settings: 0, admins: 0 };
 
@@ -180,7 +180,7 @@ function seed(db, options = {}) {
      VALUES (?, ?, ?, ?, ?, 1)`
   );
   for (const cat of DEFAULT_CATEGORIES) {
-    const r = insertCategory.run(
+    const r = await insertCategory.run(
       cat.id, t(cat.nameKey, 'en'), t(cat.nameKey, 'te'), t(cat.nameKey, 'hi'), cat.orderIndex
     );
     counts.categories += r.changes;
@@ -193,7 +193,7 @@ function seed(db, options = {}) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   for (const item of DEFAULT_FOOD_ITEMS) {
-    const r = insertItem.run(
+    const r = await insertItem.run(
       item.id, item.categoryId,
       t(item.nameKey, 'en'), t(item.nameKey, 'te'), t(item.nameKey, 'hi'),
       t(item.descKey, 'en'), t(item.descKey, 'te'), t(item.descKey, 'hi'),
@@ -208,7 +208,7 @@ function seed(db, options = {}) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   );
   for (const srv of DEFAULT_SERVICES) {
-    const r = insertService.run(
+    const r = await insertService.run(
       srv.id,
       t(srv.nameKey, 'en'), t(srv.nameKey, 'te'), t(srv.nameKey, 'hi'),
       srv.type, srv.unitPrice,
@@ -224,7 +224,7 @@ function seed(db, options = {}) {
      VALUES (?, NULL, ?, ?, ?, ?, 1, ?, 1, ?)`
   );
   for (const rev of DEFAULT_REVIEWS) {
-    const r = insertReview.run(
+    const r = await insertReview.run(
       rev.id, rev.userName, rev.rating, rev.eventType, rev.comment, rev.ownerReply, rev.createdAt
     );
     counts.reviews += r.changes;
@@ -234,17 +234,17 @@ function seed(db, options = {}) {
     'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)'
   );
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
-    const r = insertSetting.run(key, JSON.stringify(value));
+    const r = await insertSetting.run(key, JSON.stringify(value));
     counts.settings += r.changes;
   }
 
   // First-run admin (only when no admin with that email exists yet).
   const adminEmail = (options.adminEmail || process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL).toLowerCase();
   const adminPassword = options.adminPassword || process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
-  const existing = db.prepare('SELECT id FROM admin_users WHERE email = ?').get(adminEmail);
+  const existing = await db.prepare('SELECT id FROM admin_users WHERE email = ?').get(adminEmail);
   if (!existing) {
     const passwordHash = bcrypt.hashSync(adminPassword, 12);
-    db.prepare(
+    await db.prepare(
       `INSERT INTO admin_users (id, email, password_hash, name, role, must_change_password, created_at)
        VALUES (?, ?, ?, ?, 'admin', 1, ?)`
     ).run(seededAdminId(adminEmail), adminEmail, passwordHash, 'Admin', nowIso());
@@ -263,12 +263,17 @@ function seed(db, options = {}) {
 
 // Standalone runner: `npm run seed`
 if (require.main === module) {
-  const db = openDb();
-  try {
-    seed(db);
-  } finally {
-    db.close();
-  }
+  (async () => {
+    const db = await openDb();
+    try {
+      await seed(db);
+    } finally {
+      db.close();
+    }
+  })().catch((err) => {
+    console.error('Seed failed:', err);
+    process.exit(1);
+  });
 }
 
 module.exports = {

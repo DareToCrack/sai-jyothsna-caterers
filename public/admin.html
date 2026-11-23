@@ -49,12 +49,25 @@
         <div id="change-password-error" class="alert alert-error" hidden></div>
         <p class="auth-note">You must change your password before continuing.</p>
         <label class="form-label" for="change-old-password">Current password</label>
-        <input type="password" id="change-old-password" class="form-input" autocomplete="current-password" required>
+        <input type="password" id="change-old-password" class="form-input" autocomplete="current-password" placeholder="Current password" required>
         <label class="form-label" for="change-new-password">New password (min. 8 characters)</label>
-        <input type="password" id="change-new-password" class="form-input" autocomplete="new-password" minlength="8" required>
+        <input type="password" id="change-new-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="New password (min. 8 characters)" required>
         <label class="form-label" for="change-confirm-password">Confirm new password</label>
-        <input type="password" id="change-confirm-password" class="form-input" autocomplete="new-password" minlength="8" required>
+        <input type="password" id="change-confirm-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="Repeat the new password" required>
         <button type="submit" id="change-password-submit" class="btn btn-primary btn-block">Change Password &amp; Continue</button>
+      </form>
+
+      <!-- Password reset form (opened from the link emailed by "Forgot password?") -->
+      <form id="reset-password-form" class="auth-form" hidden novalidate>
+        <div id="reset-password-error" class="alert alert-error" hidden></div>
+        <div id="reset-password-info" class="alert alert-info" hidden></div>
+        <p class="auth-note">Choose a new password for your admin account. The reset link is valid for one hour and can only be used once.</p>
+        <label class="form-label" for="reset-new-password">New password (min. 8 characters)</label>
+        <input type="password" id="reset-new-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="New password (min. 8 characters)" required>
+        <label class="form-label" for="reset-confirm-password">Confirm new password</label>
+        <input type="password" id="reset-confirm-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="Repeat the new password" required>
+        <button type="submit" id="reset-password-submit" class="btn btn-primary btn-block">Reset Password &amp; Sign In</button>
+        <button type="button" id="reset-back-link" class="link-btn">Back to sign in</button>
       </form>
     </div>
   </div>
@@ -284,22 +297,22 @@
           <form id="settings-form" class="panel form-panel" hidden novalidate>
             <h3 class="panel-title">Business Details</h3>
             <div class="form-grid">
-              <div><label class="form-label" for="settings-name">Business name</label><input type="text" id="settings-name" class="form-input"></div>
-              <div><label class="form-label" for="settings-owner">Owner name</label><input type="text" id="settings-owner" class="form-input"></div>
-              <div><label class="form-label" for="settings-phone">Phone</label><input type="tel" id="settings-phone" class="form-input"></div>
-              <div><label class="form-label" for="settings-email">Email</label><input type="email" id="settings-email" class="form-input"></div>
-              <div><label class="form-label" for="settings-whatsapp">WhatsApp number</label><input type="tel" id="settings-whatsapp" class="form-input"></div>
-              <div class="form-grid-full"><label class="form-label" for="settings-address">Address</label><textarea id="settings-address" class="form-input" rows="2"></textarea></div>
+              <div><label class="form-label" for="settings-name">Business name</label><input type="text" id="settings-name" class="form-input" placeholder="Sai Jyothsna Caterers &amp; Suppliers"></div>
+              <div><label class="form-label" for="settings-owner">Owner name</label><input type="text" id="settings-owner" class="form-input" placeholder="Sai Jyothsna"></div>
+              <div><label class="form-label" for="settings-phone">Phone</label><input type="tel" id="settings-phone" class="form-input" placeholder="9848022338"></div>
+              <div><label class="form-label" for="settings-email">Email</label><input type="email" id="settings-email" class="form-input" placeholder="contact@saijyothsnacaterers.com"></div>
+              <div><label class="form-label" for="settings-whatsapp">WhatsApp number</label><input type="tel" id="settings-whatsapp" class="form-input" placeholder="919848022338"></div>
+              <div class="form-grid-full"><label class="form-label" for="settings-address">Address</label><textarea id="settings-address" class="form-input" rows="2" placeholder="H.No. 4-12, Main Road, Hyderabad, Telangana - 500001"></textarea></div>
               <div><label class="form-label" for="settings-gst-number">GST number</label><input type="text" id="settings-gst-number" class="form-input" placeholder="36AAAAA1111A1Z1"></div>
-              <div><label class="form-label" for="settings-gst-rate">GST rate (%)</label><input type="number" id="settings-gst-rate" class="form-input" step="0.1" min="0"></div>
-              <div><label class="form-label" for="settings-service-charge">Service charge rate (%)</label><input type="number" id="settings-service-charge" class="form-input" step="0.1" min="0"></div>
-              <div><label class="form-label" for="settings-transport">Default transport price (₹)</label><input type="number" id="settings-transport" class="form-input" step="1" min="0"></div>
-              <div><label class="form-label" for="settings-min-guests">Minimum guests</label><input type="number" id="settings-min-guests" class="form-input" step="1" min="1"></div>
+              <div><label class="form-label" for="settings-gst-rate">GST rate (%)</label><input type="number" id="settings-gst-rate" class="form-input" step="0.1" min="0" placeholder="5"></div>
+              <div><label class="form-label" for="settings-service-charge">Service charge rate (%)</label><input type="number" id="settings-service-charge" class="form-input" step="0.1" min="0" placeholder="5"></div>
+              <div><label class="form-label" for="settings-transport">Default transport price (₹)</label><input type="number" id="settings-transport" class="form-input" step="1" min="0" placeholder="1500"></div>
+              <div><label class="form-label" for="settings-min-guests">Minimum guests</label><input type="number" id="settings-min-guests" class="form-input" step="1" min="1" placeholder="20"></div>
             </div>
             <h3 class="panel-title panel-title-spaced">Admin Notifications</h3>
             <div class="form-grid">
-              <div><label class="form-label" for="settings-notify-email">Admin notification email</label><input type="email" id="settings-notify-email" class="form-input"></div>
-              <div><label class="form-label" for="settings-notify-whatsapp">Admin WhatsApp number</label><input type="tel" id="settings-notify-whatsapp" class="form-input"></div>
+              <div><label class="form-label" for="settings-notify-email">Admin notification email</label><input type="email" id="settings-notify-email" class="form-input" placeholder="owner@example.com"></div>
+              <div><label class="form-label" for="settings-notify-whatsapp">Admin WhatsApp number</label><input type="tel" id="settings-notify-whatsapp" class="form-input" placeholder="919848022338"></div>
             </div>
             <p class="form-note">Email and WhatsApp notifications require SMTP / WhatsApp environment configuration on the server (see <code>.env.example</code>). Without it, notifications are recorded in the Outbox but cannot be delivered.</p>
             <button type="submit" id="settings-save-btn" class="btn btn-primary"><i class="fa-solid fa-floppy-disk"></i> Save Settings</button>
@@ -311,9 +324,9 @@
           <div class="panel form-panel">
             <h3 class="panel-title">Add Admin</h3>
             <form id="admin-add-form" class="form-grid" novalidate>
-              <div><label class="form-label" for="admin-add-email">Email</label><input type="email" id="admin-add-email" class="form-input" required></div>
-              <div><label class="form-label" for="admin-add-name">Name</label><input type="text" id="admin-add-name" class="form-input"></div>
-              <div><label class="form-label" for="admin-add-password">Password (min. 8 characters)</label><input type="password" id="admin-add-password" class="form-input" minlength="8" required></div>
+              <div><label class="form-label" for="admin-add-email">Email</label><input type="email" id="admin-add-email" class="form-input" placeholder="admin@example.com" required></div>
+              <div><label class="form-label" for="admin-add-name">Name</label><input type="text" id="admin-add-name" class="form-input" placeholder="Admin name"></div>
+              <div><label class="form-label" for="admin-add-password">Password (min. 8 characters)</label><input type="password" id="admin-add-password" class="form-input" minlength="8" placeholder="Min. 8 characters" required></div>
               <div class="form-actions"><button type="submit" id="admin-add-submit" class="btn btn-primary"><i class="fa-solid fa-user-plus"></i> Add Admin</button></div>
             </form>
           </div>
@@ -396,14 +409,14 @@
         <input type="hidden" id="item-id">
         <div id="item-form-error" class="alert alert-error" hidden></div>
         <div class="form-grid">
-          <div><label class="form-label" for="item-name-en">Name (English) *</label><input type="text" id="item-name-en" class="form-input" required></div>
-          <div><label class="form-label" for="item-name-te">Name (Telugu)</label><input type="text" id="item-name-te" class="form-input"></div>
-          <div><label class="form-label" for="item-name-hi">Name (Hindi)</label><input type="text" id="item-name-hi" class="form-input"></div>
+          <div><label class="form-label" for="item-name-en">Name (English) *</label><input type="text" id="item-name-en" class="form-input" placeholder="e.g. Chicken Biryani" required></div>
+          <div><label class="form-label" for="item-name-te">Name (Telugu)</label><input type="text" id="item-name-te" class="form-input" placeholder="తెలుగు పేరు"></div>
+          <div><label class="form-label" for="item-name-hi">Name (Hindi)</label><input type="text" id="item-name-hi" class="form-input" placeholder="हिंदी नाम"></div>
           <div><label class="form-label" for="item-category">Category *</label><select id="item-category" class="form-input" required></select></div>
-          <div><label class="form-label" for="item-price">Price (₹) *</label><input type="number" id="item-price" class="form-input" step="0.01" min="0" required></div>
-          <div class="form-grid-full"><label class="form-label" for="item-desc-en">Description (English)</label><textarea id="item-desc-en" class="form-input" rows="2"></textarea></div>
-          <div><label class="form-label" for="item-desc-te">Description (Telugu)</label><textarea id="item-desc-te" class="form-input" rows="2"></textarea></div>
-          <div><label class="form-label" for="item-desc-hi">Description (Hindi)</label><textarea id="item-desc-hi" class="form-input" rows="2"></textarea></div>
+          <div><label class="form-label" for="item-price">Price (₹) *</label><input type="number" id="item-price" class="form-input" step="0.01" min="0" placeholder="e.g. 250" required></div>
+          <div class="form-grid-full"><label class="form-label" for="item-desc-en">Description (English)</label><textarea id="item-desc-en" class="form-input" rows="2" placeholder="Short description shown on the menu…"></textarea></div>
+          <div><label class="form-label" for="item-desc-te">Description (Telugu)</label><textarea id="item-desc-te" class="form-input" rows="2" placeholder="తెలుగు వివరణ"></textarea></div>
+          <div><label class="form-label" for="item-desc-hi">Description (Hindi)</label><textarea id="item-desc-hi" class="form-input" rows="2" placeholder="हिंदी विवरण"></textarea></div>
           <div class="form-grid-full"><label class="form-label" for="item-image-url">Image URL</label><input type="url" id="item-image-url" class="form-input" placeholder="https://…"></div>
           <div class="form-grid-full">
             <label class="form-label" for="item-image-file">Or upload an image</label>
@@ -435,10 +448,10 @@
         <input type="hidden" id="category-id">
         <div id="category-form-error" class="alert alert-error" hidden></div>
         <div class="form-grid">
-          <div><label class="form-label" for="category-name-en">Name (English) *</label><input type="text" id="category-name-en" class="form-input" required></div>
-          <div><label class="form-label" for="category-order">Order</label><input type="number" id="category-order" class="form-input" step="1" min="0" value="0"></div>
-          <div><label class="form-label" for="category-name-te">Name (Telugu)</label><input type="text" id="category-name-te" class="form-input"></div>
-          <div><label class="form-label" for="category-name-hi">Name (Hindi)</label><input type="text" id="category-name-hi" class="form-input"></div>
+          <div><label class="form-label" for="category-name-en">Name (English) *</label><input type="text" id="category-name-en" class="form-input" placeholder="e.g. Main Course" required></div>
+          <div><label class="form-label" for="category-order">Order</label><input type="number" id="category-order" class="form-input" step="1" min="0" value="0" placeholder="0"></div>
+          <div><label class="form-label" for="category-name-te">Name (Telugu)</label><input type="text" id="category-name-te" class="form-input" placeholder="తెలుగు పేరు"></div>
+          <div><label class="form-label" for="category-name-hi">Name (Hindi)</label><input type="text" id="category-name-hi" class="form-input" placeholder="हिंदी नाम"></div>
           <div class="checkbox-row"><input type="checkbox" id="category-is-active" checked><label for="category-is-active">Active</label></div>
         </div>
       </form>
@@ -460,17 +473,17 @@
         <input type="hidden" id="service-id">
         <div id="service-form-error" class="alert alert-error" hidden></div>
         <div class="form-grid">
-          <div><label class="form-label" for="service-name-en">Name (English) *</label><input type="text" id="service-name-en" class="form-input" required></div>
+          <div><label class="form-label" for="service-name-en">Name (English) *</label><input type="text" id="service-name-en" class="form-input" placeholder="e.g. Waiter Service" required></div>
           <div><label class="form-label" for="service-type">Type *</label>
             <select id="service-type" class="form-input" required>
               <option value="checkbox">Checkbox (flat fee)</option>
               <option value="number">Number (count adjustable)</option>
             </select>
           </div>
-          <div><label class="form-label" for="service-name-te">Name (Telugu)</label><input type="text" id="service-name-te" class="form-input"></div>
-          <div><label class="form-label" for="service-name-hi">Name (Hindi)</label><input type="text" id="service-name-hi" class="form-input"></div>
-          <div><label class="form-label" for="service-price">Unit price (₹) *</label><input type="number" id="service-price" class="form-input" step="0.01" min="0" required></div>
-          <div><label class="form-label" for="service-default-qty">Default quantity</label><input type="number" id="service-default-qty" class="form-input" step="1" min="0" value="1"></div>
+          <div><label class="form-label" for="service-name-te">Name (Telugu)</label><input type="text" id="service-name-te" class="form-input" placeholder="తెలుగు పేరు"></div>
+          <div><label class="form-label" for="service-name-hi">Name (Hindi)</label><input type="text" id="service-name-hi" class="form-input" placeholder="हिंदी नाम"></div>
+          <div><label class="form-label" for="service-price">Unit price (₹) *</label><input type="number" id="service-price" class="form-input" step="0.01" min="0" placeholder="e.g. 500" required></div>
+          <div><label class="form-label" for="service-default-qty">Default quantity</label><input type="number" id="service-default-qty" class="form-input" step="1" min="0" value="1" placeholder="1"></div>
           <div class="checkbox-row"><input type="checkbox" id="service-is-available" checked><label for="service-is-available">Available for booking</label></div>
         </div>
       </form>
