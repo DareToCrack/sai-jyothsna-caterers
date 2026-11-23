@@ -21,13 +21,20 @@ let appPromise = null;
 
 function getApp() {
   if (!appPromise) {
-    appPromise = Promise.resolve()
-      .then(() => createApp().app)
-      .catch((err) => {
+    // createApp() is async (it opens the database) — await it before
+    // taking .app. (Calling createApp().app on the pending promise
+    // resolves to undefined and every request then fails with
+    // "TypeError: app is not a function".)
+    appPromise = (async () => {
+      try {
+        const { app } = await createApp();
+        return app;
+      } catch (err) {
         appPromise = null; // let a later request retry initialisation
         console.error('Serverless app initialisation failed:', err);
         throw err;
-      });
+      }
+    })();
   }
   return appPromise;
 }

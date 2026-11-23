@@ -244,11 +244,15 @@ async function seed(db, options = {}) {
   const existing = await db.prepare('SELECT id FROM admin_users WHERE email = ?').get(adminEmail);
   if (!existing) {
     const passwordHash = bcrypt.hashSync(adminPassword, 12);
-    await db.prepare(
-      `INSERT INTO admin_users (id, email, password_hash, name, role, must_change_password, created_at)
+    // INSERT OR IGNORE, not a plain INSERT: several serverless instances
+    // share one Turso database and can seed at the same time — two
+    // instances can both pass the check above, and a plain INSERT would
+    // then crash the loser with a UNIQUE constraint failure.
+    const r = await db.prepare(
+      `INSERT OR IGNORE INTO admin_users (id, email, password_hash, name, role, must_change_password, created_at)
        VALUES (?, ?, ?, ?, 'admin', 1, ?)`
     ).run(seededAdminId(adminEmail), adminEmail, passwordHash, 'Admin', nowIso());
-    counts.admins += 1;
+    counts.admins += r.changes;
   }
 
   if (log) {
