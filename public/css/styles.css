@@ -227,23 +227,30 @@ body.dark-mode .nav-link.active { background-color: rgba(229, 193, 88, 0.15); co
 
 .lang-switcher {
   display: flex;
+  align-items: center;
+}
+/* Language picker (header + settings): a native <select> listing all
+   supported languages by their own-script names. */
+.lang-select {
+  padding: 8px 28px 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--primary);
+  background-color: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  overflow: hidden;
-  background-color: var(--surface);
-}
-.lang-btn {
-  padding: 8px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  background: none;
-  border: none;
   cursor: pointer;
-  color: var(--text-muted);
-  transition: var(--transition);
+  max-width: 140px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%230C3E26' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
 }
-.lang-btn.active { background-color: var(--primary); color: #FFFFFF; }
-body.dark-mode .lang-btn.active { background-color: var(--secondary); color: #121815; }
+.lang-select:hover { border-color: var(--primary); }
+.lang-select:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+body.dark-mode .lang-select { color: var(--accent); }
 
 .auth-area { display: flex; align-items: center; gap: 8px; }
 .auth-user-name {
@@ -554,6 +561,11 @@ input:checked + .slider::before { transform: translateX(22px); }
 }
 .hero-title em { color: var(--accent); font-style: italic; }
 .hero-sub { font-size: 18px; color: rgba(255, 255, 255, 0.85); max-width: 560px; margin-bottom: 28px; }
+/* Urdu's tall Arabic-script glyphs need more line-height than Latin:
+   at the default 1.1 the hero title lines touch each other. */
+html[lang="ur"] .hero-title { line-height: 1.7; }
+html[lang="ur"] .hero-eyebrow { line-height: 1.8; letter-spacing: 0; text-transform: none; }
+html[lang="ur"] .hero-sub { line-height: 1.9; }
 .hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; }
 .hero-ctas .btn-secondary { color: #FFFFFF; border-color: rgba(255, 255, 255, 0.7); }
 .hero-dots { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; z-index: 3; }
@@ -1063,7 +1075,7 @@ body.dark-mode .modal-btn-primary { background-color: var(--secondary); color: #
   .brand-sub { display: none; }
   .brand-name { font-size: 17px; }
   .auth-user-name { display: none; }
-  .lang-switcher .lang-btn { padding: 8px 7px; font-size: 11px; }
+  .lang-select { max-width: 108px; font-size: 12px; padding: 8px 24px 8px 8px; }
   .header-inner { gap: 12px; }
   /* Login / Logout become icon-only buttons so the header fits. */
   .auth-area .btn { font-size: 0; padding: 8px 10px; }

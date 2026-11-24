@@ -4,7 +4,7 @@
  * the same-origin JSON API — there is NO mock/local database in this file.
  * localStorage holds ONLY:
  *   sjc_cart      { items: {dishId: true}, services: {srvId: qty|true}, guests, transport }
- *   sjc_lang      'en' | 'te' | 'hi'
+ *   sjc_lang      'en' | 'hi' | 'te' | 'ta' | 'kn' | 'ml' | 'mr' | 'bn' | 'gu' | 'pa' | 'ur'
  *   sjc_dark_mode 'true' | 'false'
  * (transport is cart state: the cart and the booking wizard share one picker.)
  *
@@ -35,16 +35,30 @@ function fmtINR(n) {
   return '₹' + (Number.isFinite(num) ? num : 0).toLocaleString('en-IN');
 }
 
+/** Languages the UI supports, in picker order. To add a language: add its
+ * dictionary to translations.js, one entry here, and one locale below. */
+const SUPPORTED_LANGS = ['en', 'hi', 'te', 'ta', 'kn', 'ml', 'mr', 'bn', 'gu', 'pa', 'ur'];
+/** Display name of each language, in its own script (picker options). */
+const LANG_NAMES = {
+  en: 'English', hi: 'हिन्दी', te: 'తెలుగు', ta: 'தமிழ்', kn: 'ಕನ್ನಡ',
+  ml: 'മലയാളം', mr: 'मराठी', bn: 'বাংলা', gu: 'ગુજરાતી', pa: 'ਪੰਜਾਬੀ', ur: 'اردو'
+};
+/** BCP 47 locale per language for date formatting (fmtDate); English fallback. */
+const LANG_LOCALES = {
+  hi: 'hi-IN', te: 'te-IN', ta: 'ta-IN', kn: 'kn-IN', ml: 'ml-IN',
+  mr: 'mr-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', ur: 'ur-IN'
+};
+
 /** Format an ISO date (YYYY-MM-DD) for display in the current language. */
 function fmtDate(iso, lang) {
   if (!iso) return '';
   const d = new Date(iso + (iso.length === 10 ? 'T00:00:00' : ''));
   if (Number.isNaN(d.getTime())) return String(iso);
-  const locale = lang === 'te' ? 'te-IN' : (lang === 'hi' ? 'hi-IN' : 'en-IN');
+  const locale = LANG_LOCALES[lang] || 'en-IN';
   return d.toLocaleDateString(locale, { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-/** Pick the localized string from an {en, te, hi} object, English fallback. */
+/** Pick the localized string from a {lang: string} object, English fallback. */
 function locText(obj, lang) {
   if (!obj) return '';
   if (typeof obj === 'string') return obj;
@@ -211,7 +225,7 @@ class ApplicationController {
   readLang() {
     try {
       const v = localStorage.getItem('sjc_lang');
-      return (v === 'te' || v === 'hi') ? v : 'en';
+      return SUPPORTED_LANGS.includes(v) ? v : 'en';
     } catch (e) { return 'en'; }
   }
 
@@ -226,12 +240,12 @@ class ApplicationController {
   }
 
   setLanguage(lang) {
-    if (!['en', 'te', 'hi'].includes(lang)) lang = 'en';
+    if (!SUPPORTED_LANGS.includes(lang)) lang = 'en';
     this.lang = lang;
     try { localStorage.setItem('sjc_lang', lang); } catch (e) { /* private mode */ }
     document.documentElement.lang = lang;
     this.applyShellI18n();
-    this.updateLangButtons();
+    this.updateLangSelects();
     this.updateAuthUI();
     this.route(); // re-render the current view in the new language
   }
@@ -256,9 +270,22 @@ class ApplicationController {
     });
   }
 
-  updateLangButtons() {
-    document.querySelectorAll('.lang-btn').forEach((b) => {
-      b.classList.toggle('active', b.dataset.lang === this.lang);
+  // The language pickers are <select> elements (header + settings view).
+  // Their options are built once from LANG_NAMES (single source of truth)
+  // and the value is synced to the current language. Called on init, on
+  // every language change, and after the settings view re-renders (its
+  // select is recreated each time).
+  updateLangSelects() {
+    document.querySelectorAll('.lang-select').forEach((sel) => {
+      if (!sel.options.length) {
+        SUPPORTED_LANGS.forEach((code) => {
+          const opt = document.createElement('option');
+          opt.value = code;
+          opt.textContent = LANG_NAMES[code];
+          sel.appendChild(opt);
+        });
+      }
+      sel.value = this.lang;
     });
   }
 
@@ -272,7 +299,7 @@ class ApplicationController {
 
     this.bindShellEvents();
     this.applyShellI18n();
-    this.updateLangButtons();
+    this.updateLangSelects();
     this.updateCartBadge();
 
     // Dish photos are remote URLs: if one fails to load (host down, offline),
@@ -345,6 +372,12 @@ class ApplicationController {
   bindShellEvents() {
     // One delegated click handler for every [data-action] in the app
     // (header, footer, drawer, modals and all dynamically rendered views).
+    // Language pickers are <select> elements (header + settings view).
+    document.addEventListener('change', (e) => {
+      const sel = e.target.closest('.lang-select');
+      if (sel) this.setLanguage(sel.value);
+    });
+
     document.addEventListener('click', (e) => {
       // Show/hide password (eye icon) on every password field.
       const toggle = e.target.closest('.password-toggle');
@@ -366,7 +399,7 @@ class ApplicationController {
       const action = el.dataset.action;
       const id = el.dataset.id || '';
       switch (action) {
-        case 'set-lang': this.setLanguage(el.dataset.lang); break;
+        case 'set-lang': this.setLanguage(el.dataset.lang); break; // legacy; pickers are <select> now (see change listener below)
         case 'toggle-dark': this.setDarkMode(!this.darkMode); break;
         case 'logout': this.logout(); break;
         case 'toggle-mobile-nav': this.toggleMobileNav(true); break;
@@ -2360,9 +2393,7 @@ class ApplicationController {
         '<div class="settings-list">' +
           '<div class="settings-row"><div class="settings-left"><i class="fa-solid fa-language"></i><span>' + esc(this.t('language_label')) + '</span></div>' +
             '<div class="lang-switcher">' +
-              '<button type="button" class="lang-btn" data-action="set-lang" data-lang="en">EN</button>' +
-              '<button type="button" class="lang-btn" data-action="set-lang" data-lang="te">తెలుగు</button>' +
-              '<button type="button" class="lang-btn" data-action="set-lang" data-lang="hi">हिन्दी</button>' +
+              '<select class="lang-select" aria-label="' + esc(this.t('language_label')) + '"></select>' +
             '</div></div>' +
           '<div class="settings-row"><div class="settings-left"><i class="fa-solid fa-moon"></i><span>' + esc(this.t('dark_mode_label')) + '</span></div>' +
             '<label class="switch"><input type="checkbox" id="settings-dark-toggle"' + (this.darkMode ? ' checked' : '') + '><span class="slider"></span></label></div>' +
@@ -2373,7 +2404,7 @@ class ApplicationController {
         '</div>' +
       '</div></div>';
 
-    this.updateLangButtons();
+    this.updateLangSelects();
     const darkToggle = $('settings-dark-toggle');
     if (darkToggle) darkToggle.addEventListener('change', () => this.setDarkMode(darkToggle.checked));
     const form = $('settings-form');
