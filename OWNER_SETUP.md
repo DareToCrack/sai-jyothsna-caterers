@@ -228,16 +228,22 @@ to start with.
 You can do this right now, before the other steps.
 
 1. Open **https://sai-jyothsna-caterers.vercel.app/admin.html**
-2. Log in with:
-   - **Email:** `admin@saijyothsna.local`
-   - **Password:** `ChangeMe123!`
-3. The portal will **force you to choose a new password** before showing
-   the dashboard. Pick a strong one (at least 8 characters) and keep it
-   safe — this is the master key to your business website.
+2. Log in with the **email and temporary password your developer gave
+   you** (they are in the handover note, not written here — keep them
+   private, like a bank password).
+3. Right after logging in, change the temporary password to your own:
+   click **Change Password** in the left menu, enter the temporary
+   password, then your new password twice. Pick a strong one (at least
+   8 characters, with a mix of letters and numbers) and keep it safe —
+   this is the master key to your business website.
 4. If you ever forget the password, use the **"Forgot password?"** link
    on the login page (it emails a reset link — needs Step 2 to be set
    up), or ask your developer to reset it.
 
+> **Locked out?** If you type the wrong password 5 times, the account
+> locks for 15 minutes to stop strangers guessing it. Just wait — the
+> lock clears by itself, and the login page tells you how long is left.
+>
 > You can add more admin accounts later from the portal itself
 > (Admins section), so staff can help without sharing your password.
 
@@ -259,6 +265,10 @@ Everything is done in the admin portal — no code, no developer needed.
   where you want booking notifications.
 - **Bookings / Inquiries / Customers / Reviews:** see every booking
   with its full quotation, reply to reviews, and follow up enquiries.
+  Every booking row has a **Delete** button — use it only for test,
+  duplicate, or wrongly made bookings, because deleting is permanent.
+  For a real booking the customer cancels, open it and change its
+  status to **Cancelled** instead, so you keep the record.
 
 **Important:** prices you change apply to *new* bookings only. Quotations
 already issued to customers never change — the price at booking time is

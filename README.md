@@ -58,21 +58,36 @@ customers can log in without it.
 
 ## First-run admin login
 
+**Local development** (default, dev-only — never used in production):
+
 | Field | Value |
 |---|---|
 | URL | <http://localhost:3000/admin.html> |
 | Email | `admin@saijyothsna.local` |
 | Password | `ChangeMe123!` |
 
-The seeded admin **must change this password on first login** — the portal
-forces the change before showing the dashboard. Change the defaults with
-`ADMIN_EMAIL` / `ADMIN_PASSWORD` in `.env` *before* the first start, or reset
-later with:
+**Production (Vercel): there is no default password.** The first-run admin
+comes from the `ADMIN_EMAIL` / `ADMIN_PASSWORD` environment variables, which
+must be set in Vercel **before the first deploy**. If `ADMIN_PASSWORD` is not
+set, no admin account is created at all and the server logs a warning — a
+hardcoded password in a public repo would let anyone log in to the live
+admin portal. Change the local defaults with `ADMIN_EMAIL` /
+`ADMIN_PASSWORD` in `.env` *before* the first start, or reset later with:
 
 ```bash
 ADMIN_EMAIL=owner@example.com ADMIN_PASSWORD='NewPass123' npm run reset-admin
 # or: node server/reset-admin.js --email owner@example.com --password 'NewPass123'
 ```
+
+The seeded admin **must change this password on first login** — the portal
+forces the change before showing the dashboard. An admin can change their
+password at any time from the portal sidebar (Change Password).
+
+**Brute-force protection:** 5 wrong passwords lock an admin account for 15
+minutes (the counter and lock live in the database, so they work across
+serverless instances). Logins are also rate-limited (10 attempts per 15
+minutes per IP). A locked account shows how long to wait; the lock clears
+automatically, and a successful login resets the counter.
 
 ## Configuration (`.env`)
 
@@ -88,7 +103,7 @@ dependency). Real environment variables always win over `.env` values.
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | **Required on Vercel for a real live app.** Hosted Turso database (free tier) — without these the Vercel deployment is ephemeral demo mode (see [Database](#database)) |
 | `CRON_SECRET` | Shared secret for the keep-alive cron endpoint; Vercel sets and sends this automatically when cron jobs are configured |
 | `SESSION_SECRET` | **Required on Vercel.** Secret for signing session cookies (see below) |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | First-run admin (defaults above) |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | First-run admin — **required on Vercel** (no default password in production); local default `admin@saijyothsna.local` / `ChangeMe123!` |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | SMTP for admin notification emails + admin and customer password-reset emails |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Sign-In for customers (OAuth client from Google Cloud; see [Customer login](#customer-login)). Without these the Google button is hidden |
 | `GOOGLE_REDIRECT_URI` | Override for the Google OAuth redirect URI (default: request origin + `/api/auth/google/callback`) |

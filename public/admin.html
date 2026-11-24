@@ -47,7 +47,7 @@
       <!-- Forced password change form -->
       <form id="change-password-form" class="auth-form" hidden novalidate>
         <div id="change-password-error" class="alert alert-error" hidden></div>
-        <p class="auth-note">You must change your password before continuing.</p>
+        <p class="auth-note" id="change-password-note">You must change your password before continuing.</p>
         <label class="form-label" for="change-old-password">Current password</label>
         <input type="password" id="change-old-password" class="form-input" autocomplete="current-password" placeholder="Current password" required>
         <label class="form-label" for="change-new-password">New password (min. 8 characters)</label>
@@ -55,6 +55,7 @@
         <label class="form-label" for="change-confirm-password">Confirm new password</label>
         <input type="password" id="change-confirm-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="Repeat the new password" required>
         <button type="submit" id="change-password-submit" class="btn btn-primary btn-block">Change Password &amp; Continue</button>
+        <button type="button" id="change-password-back" class="btn btn-secondary btn-block" style="margin-top:8px;" hidden>Back to Dashboard</button>
       </form>
 
       <!-- Password reset form (opened from the link emailed by "Forgot password?") -->
@@ -100,6 +101,7 @@
       </nav>
       <div class="sidebar-footer">
         <a class="nav-item nav-link" href="/" target="_blank" rel="noopener"><i class="fa-solid fa-globe"></i><span>View Website</span></a>
+        <button class="nav-item nav-link" id="change-password-btn"><i class="fa-solid fa-key"></i><span>Change Password</span></button>
         <button class="nav-item nav-logout" id="logout-btn"><i class="fa-solid fa-right-from-bracket"></i><span>Logout</span></button>
       </div>
     </aside>

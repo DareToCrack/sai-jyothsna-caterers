@@ -286,11 +286,19 @@ function showLogin(message) {
   if (email) email.focus();
 }
 
-function showChangePassword() {
+// voluntary=true when the admin opens it from the sidebar (Change
+// Password button): the form gets a Back button and a neutral note, so
+// they can return to the dashboard without changing anything. The forced
+// first-login flow (voluntary=false) has no way back, by design.
+function showChangePassword(voluntary = false) {
   $('portal-view').hidden = true;
   $('auth-view').hidden = false;
   showAuthForm('change-password-form');
   hideAlert('change-password-error');
+  $('change-password-note').textContent = voluntary
+    ? 'Choose a new password for your admin account.'
+    : 'You must change your password before continuing.';
+  $('change-password-back').hidden = !voluntary;
   $('change-old-password').value = '';
   $('change-new-password').value = '';
   $('change-confirm-password').value = '';
@@ -688,10 +696,13 @@ async function loadBookings() {
           <td>${esc(num(b.guests))}</td>
           <td class="cell-nowrap">${esc(money(b.grandTotal))}</td>
           <td>${statusBadge(b.status)}</td>
-          <td class="cell-actions"><button type="button" class="btn btn-xs btn-secondary" data-booking-id="${esc(b.id)}">View</button></td>
+          <td class="cell-actions"><button type="button" class="btn btn-xs btn-secondary" data-booking-id="${esc(b.id)}">View</button> <button type="button" class="btn btn-xs btn-danger" data-delete-booking-id="${esc(b.id)}" data-quote="${esc(b.quoteNumber || b.id)}">Delete</button></td>
         </tr>`).join('');
       body.querySelectorAll('button[data-booking-id]').forEach((btn) => {
         btn.addEventListener('click', () => openBookingDetail(btn.dataset.bookingId));
+      });
+      body.querySelectorAll('button[data-delete-booking-id]').forEach((btn) => {
+        btn.addEventListener('click', () => deleteBooking(btn.dataset.deleteBookingId, btn.dataset.quote));
       });
     }
   } catch (err) {
@@ -796,6 +807,20 @@ async function openBookingDetail(id) {
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
     modalBody.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to load this booking.')}</div>`;
+  }
+}
+
+async function deleteBooking(id, quoteNumber) {
+  const ok = await confirmDialog('Delete Booking', `Permanently delete booking ${quoteNumber || id}? This removes the booking and its food/service lines, and cannot be undone. To keep the record, cancel the booking instead (open it and change its status to Cancelled).`, 'Delete');
+  if (!ok) return;
+  try {
+    await api('/api/admin/bookings/' + encodeURIComponent(id), { method: 'DELETE' });
+    showToast('Booking deleted.');
+    loadBookings();
+    if (state.section === 'dashboard') loadDashboard();
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return;
+    showToast(err.message || 'Failed to delete the booking.', 'error');
   }
 }
 
@@ -1944,6 +1969,8 @@ function init() {
     showAuthForm('login-form');
   });
   $('logout-btn').addEventListener('click', handleLogout);
+  $('change-password-btn').addEventListener('click', () => showChangePassword(true));
+  $('change-password-back').addEventListener('click', showPortal);
 
   // Vercel demo-deployment notice (admin dashboard only): dismissible for
   // the rest of the browser session.

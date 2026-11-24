@@ -1225,3 +1225,133 @@ test('openDb migrates a legacy users table (phone NOT NULL, no auth columns)', a
     fs.rmSync(legacyDir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// (25) Admin booking delete: removes the booking + its lines, 404s on
+// repeat, 401s without an admin session.
+// ---------------------------------------------------------------------------
+
+test('admin can delete a booking and its lines; repeat delete 404s', async () => {
+  const customer = new Client();
+  await loginCustomer(customer, '9876500091', 'Delete Me');
+  const created = await customer.req('POST', '/api/bookings', bookingBody());
+  assert.equal(created.status, 201, `booking failed: ${created.text}`);
+  const bookingId = created.body.booking.id;
+
+  const itemsBefore = await db.prepare(
+    'SELECT COUNT(*) AS n FROM booking_items WHERE booking_id = ?').get(bookingId);
+  const servicesBefore = await db.prepare(
+    'SELECT COUNT(*) AS n FROM booking_services WHERE booking_id = ?').get(bookingId);
+  assert.ok(itemsBefore.n > 0, 'booking should have item lines before delete');
+  assert.ok(servicesBefore.n > 0, 'booking should have service lines before delete');
+
+  // No session -> 401.
+  const anon = new Client();
+  const anonDel = await anon.req('DELETE', `/api/admin/bookings/${bookingId}`);
+  assert.equal(anonDel.status, 401);
+
+  const admin = new Client();
+  await loginAdmin(admin);
+  const del = await admin.req('DELETE', `/api/admin/bookings/${bookingId}`);
+  assert.equal(del.status, 200, `delete failed: ${del.text}`);
+  assert.equal(del.body.deleted, true);
+
+  const gone = await admin.req('GET', `/api/admin/bookings/${bookingId}`);
+  assert.equal(gone.status, 404);
+  const itemsAfter = await db.prepare(
+    'SELECT COUNT(*) AS n FROM booking_items WHERE booking_id = ?').get(bookingId);
+  const servicesAfter = await db.prepare(
+    'SELECT COUNT(*) AS n FROM booking_services WHERE booking_id = ?').get(bookingId);
+  assert.equal(itemsAfter.n, 0, 'booking item lines must be deleted too');
+  assert.equal(servicesAfter.n, 0, 'booking service lines must be deleted too');
+
+  const again = await admin.req('DELETE', `/api/admin/bookings/${bookingId}`);
+  assert.equal(again.status, 404);
+});
+
+// ---------------------------------------------------------------------------
+// (26) Admin login lockout: 5 wrong passwords lock the account for 15
+// minutes (423); the correct password is rejected while locked and works
+// again once the lock expires.
+// ---------------------------------------------------------------------------
+
+test('admin login locks after 5 wrong passwords and unlocks after expiry', async () => {
+  const admin = new Client();
+  await loginAdmin(admin);
+  const created = await admin.req('POST', '/api/admin/admins', {
+    email: 'lockout-test@example.com',
+    password: 'LockoutTest123',
+    name: 'Lockout Test'
+  });
+  assert.equal(created.status, 201, `admin create failed: ${created.text}`);
+  const throwawayId = created.body.admin.id;
+
+  try {
+    const probe = new Client();
+    for (let i = 1; i <= 4; i++) {
+      const r = await probe.req('POST', '/api/admin/auth/login', {
+        email: 'lockout-test@example.com', password: 'WrongPassword123'
+      });
+      assert.equal(r.status, 401, `attempt ${i} should be 401, got ${r.status}`);
+    }
+    const fifth = await probe.req('POST', '/api/admin/auth/login', {
+      email: 'lockout-test@example.com', password: 'WrongPassword123'
+    });
+    assert.equal(fifth.status, 423, `5th wrong attempt should lock (423), got ${fifth.status}`);
+    assert.equal(fifth.body.error, 'ACCOUNT_LOCKED');
+
+    // Correct password is still rejected while locked.
+    const whileLocked = await probe.req('POST', '/api/admin/auth/login', {
+      email: 'lockout-test@example.com', password: 'LockoutTest123'
+    });
+    assert.equal(whileLocked.status, 423);
+
+    // Move the lock into the past (simulating expiry) — login works again
+    // and the failure counter resets.
+    const past = new Date(Date.now() - 1000).toISOString();
+    await db.prepare('UPDATE admin_users SET locked_until = ? WHERE id = ?').run(past, throwawayId);
+    const afterExpiry = await probe.req('POST', '/api/admin/auth/login', {
+      email: 'lockout-test@example.com', password: 'LockoutTest123'
+    });
+    assert.equal(afterExpiry.status, 200, `login after lock expiry failed: ${afterExpiry.text}`);
+    const row = await db.prepare('SELECT failed_attempts, locked_until FROM admin_users WHERE id = ?').get(throwawayId);
+    assert.equal(row.failed_attempts, 0);
+    assert.equal(row.locked_until, null);
+  } finally {
+    await admin.req('DELETE', `/api/admin/admins/${throwawayId}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (27) Production seed (VERCEL=1) without ADMIN_PASSWORD seeds no admin —
+// the hardcoded default password must never reach a public production DB.
+// ---------------------------------------------------------------------------
+
+test('production seed without ADMIN_PASSWORD creates no admin account', async () => {
+  const { openDb } = require('../server/db');
+  const { seed } = require('../server/seed');
+  const prevVercel = process.env.VERCEL;
+  const prevPassword = process.env.ADMIN_PASSWORD;
+  const prodDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sjc-prod-seed-'));
+  const dbPath = path.join(prodDir, 'prod.db');
+  try {
+    process.env.VERCEL = '1';
+    delete process.env.ADMIN_PASSWORD;
+    const prodDb = await openDb(dbPath);
+    try {
+      await seed(prodDb, { log: false });
+      const admins = await prodDb.prepare('SELECT COUNT(*) AS n FROM admin_users').get();
+      assert.equal(admins.n, 0, 'no admin must be seeded in production without ADMIN_PASSWORD');
+      // The rest of the seed data still loads.
+      const cats = await prodDb.prepare('SELECT COUNT(*) AS n FROM categories').get();
+      assert.equal(cats.n, 13);
+    } finally {
+      prodDb.close();
+    }
+  } finally {
+    if (prevVercel === undefined) delete process.env.VERCEL;
+    else process.env.VERCEL = prevVercel;
+    if (prevPassword !== undefined) process.env.ADMIN_PASSWORD = prevPassword;
+    fs.rmSync(prodDir, { recursive: true, force: true });
+  }
+});

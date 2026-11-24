@@ -20,6 +20,11 @@ const { ok, fail, asyncHandler, badRequest, notFound, forbidden } = lib;
 
 const BCRYPT_COST = 12;
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+// Brute-force protection for admin login (stored in the DB so it works
+// across serverless instances, unlike the in-memory rate limiter): 5
+// wrong passwords lock the account for 15 minutes.
+const MAX_ADMIN_LOGIN_ATTEMPTS = 5;
+const ADMIN_LOCKOUT_MS = 15 * 60 * 1000;
 const BOOKING_STATUSES = ['pending', 'confirmed', 'completed', 'cancelled'];
 const INQUIRY_STATUSES = ['new', 'contacted', 'closed'];
 
@@ -66,6 +71,12 @@ function adminRoutes(ctx) {
   // =========================================================================
 
   // POST /api/admin/auth/login — generic error on failure (no enumeration).
+  // Brute-force protection: after MAX_ADMIN_LOGIN_ATTEMPTS wrong
+  // passwords the account locks for ADMIN_LOCKOUT_MS. The counter and
+  // the lock live in the database, so they work across serverless
+  // instances. A locked account gets a 423 with the wait time; every
+  // other failure gets the same generic 401, whether the email exists
+  // or not.
   router.post('/auth/login', asyncHandler(async (req, res) => {
     const body = req.body || {};
     const email = lib.reqString(body, 'email', { max: 254 }).toLowerCase();
@@ -74,9 +85,32 @@ function adminRoutes(ctx) {
     if (!admin) {
       return fail(res, 401, 'INVALID_CREDENTIALS', 'Invalid email or password');
     }
+    if (admin.locked_until && Date.parse(admin.locked_until) > Date.now()) {
+      const minutes = Math.ceil((Date.parse(admin.locked_until) - Date.now()) / 60000);
+      return fail(res, 423, 'ACCOUNT_LOCKED',
+        `Too many failed login attempts. This account is locked — please try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`);
+    }
     const matches = await bcrypt.compare(password, admin.password_hash);
     if (!matches) {
+      const attempts = (admin.failed_attempts || 0) + 1;
+      if (attempts >= MAX_ADMIN_LOGIN_ATTEMPTS) {
+        const lockedUntil = new Date(Date.now() + ADMIN_LOCKOUT_MS).toISOString();
+        await db.prepare(
+          'UPDATE admin_users SET failed_attempts = ?, locked_until = ? WHERE id = ?'
+        ).run(attempts, lockedUntil, admin.id);
+        await lib.auditLog(db, admin.id, 'admin.locked-out', { email: admin.email, attempts });
+        return fail(res, 423, 'ACCOUNT_LOCKED',
+          'Too many failed login attempts. This account is locked for 15 minutes.');
+      }
+      await db.prepare(
+        'UPDATE admin_users SET failed_attempts = ? WHERE id = ?'
+      ).run(attempts, admin.id);
       return fail(res, 401, 'INVALID_CREDENTIALS', 'Invalid email or password');
+    }
+    if (admin.failed_attempts || admin.locked_until) {
+      await db.prepare(
+        'UPDATE admin_users SET failed_attempts = 0, locked_until = NULL WHERE id = ?'
+      ).run(admin.id);
     }
     const session = lib.createSession('admin', admin.id);
     lib.setSessionCookies(res, session);
@@ -555,6 +589,30 @@ function adminRoutes(ctx) {
     await lib.auditLog(db, req.admin.id, 'booking.update', { id: req.params.id, status });
     const row = await db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
     return ok(res, { booking: await lib.mapBookingDetail(db, row) });
+  }));
+
+  // DELETE /api/admin/bookings/:id — permanently deletes a booking and
+  // its food/service lines. Child rows are deleted explicitly: there is
+  // no FK cascade on Turso (the foreign_keys PRAGMA is a no-op over
+  // HTTP), so deleting only the booking would orphan its lines. The
+  // delete is recorded in the audit log. Use for test, duplicate, or
+  // cancelled-by-mistake bookings; cancelling (PATCH status) is the
+  // non-destructive option for real bookings.
+  router.delete('/bookings/:id', asyncHandler(async (req, res) => {
+    const existing = await db.prepare('SELECT * FROM bookings WHERE id = ?').get(req.params.id);
+    if (!existing) return notFound('Booking not found');
+    await db.batch([
+      { sql: 'DELETE FROM booking_items WHERE booking_id = ?', args: [req.params.id] },
+      { sql: 'DELETE FROM booking_services WHERE booking_id = ?', args: [req.params.id] },
+      { sql: 'DELETE FROM bookings WHERE id = ?', args: [req.params.id] }
+    ]);
+    await lib.auditLog(db, req.admin.id, 'booking.delete', {
+      id: req.params.id,
+      quoteNumber: existing.quote_number,
+      customerName: existing.customer_name,
+      grandTotal: existing.grand_total
+    });
+    return ok(res, { deleted: true });
   }));
 
   // --- Customers -----------------------------------------------------------

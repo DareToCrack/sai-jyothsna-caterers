@@ -16,9 +16,13 @@
 //   * Settings are inserted only when absent (INSERT OR IGNORE), so an admin's
 //     later changes are never overwritten by a re-seed.
 //   * First-run admin comes from ADMIN_EMAIL / ADMIN_PASSWORD env vars
-//     (defaults admin@saijyothsna.local / ChangeMe123!), bcrypt cost 12,
-//     must_change_password = 1. Created only if no admin with that email
-//     exists yet. Its id is DETERMINISTIC (SHA-256 of the email, formatted
+//     (local dev / test default: admin@saijyothsna.local / ChangeMe123!),
+//     bcrypt cost 12, must_change_password = 1. Created only if no admin
+//     with that email exists yet. ON VERCEL (production) there is NO
+//     default password: if ADMIN_PASSWORD is not set, no admin is seeded
+//     and the server logs a warning — a hardcoded password in a public
+//     repo would let anyone log in to the live admin portal. Its id is
+//     DETERMINISTIC (SHA-256 of the email, formatted
 //     as a UUID) — deliberately, so the same seeded admin row exists on
 //     every Vercel serverless instance and admin sessions (stateless,
 //     signed tokens carrying the admin id) work across instances.
@@ -178,8 +182,20 @@ async function seed(db, options = {}) {
   // First-run admin (only when no admin with that email exists yet).
   // This runs on every startup so a missing admin is always recreated.
   const adminEmail = (options.adminEmail || process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL).toLowerCase();
-  const adminPassword = options.adminPassword || process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
-  const existing = await db.prepare('SELECT id FROM admin_users WHERE email = ?').get(adminEmail);
+  const adminPassword = options.adminPassword || process.env.ADMIN_PASSWORD ||
+    (process.env.VERCEL === '1' ? null : DEFAULT_ADMIN_PASSWORD);
+  if (!adminPassword) {
+    // Production without ADMIN_PASSWORD: refuse to seed an admin with a
+    // publicly known default password. The operator must set
+    // ADMIN_PASSWORD in Vercel (see README / OWNER_SETUP.md) and redeploy.
+    console.warn(
+      'WARNING: ADMIN_PASSWORD is not set — no admin account was created. ' +
+      'Set ADMIN_PASSWORD in the Vercel project settings and redeploy to create one.'
+    );
+  }
+  const existing = adminPassword
+    ? await db.prepare('SELECT id FROM admin_users WHERE email = ?').get(adminEmail)
+    : true; // no password -> skip the insert below entirely
   if (!existing) {
     const passwordHash = bcrypt.hashSync(adminPassword, 12);
     // INSERT OR IGNORE, not a plain INSERT: several serverless instances

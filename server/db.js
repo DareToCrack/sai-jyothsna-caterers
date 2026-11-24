@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS admin_users (
   name TEXT,
   role TEXT DEFAULT 'admin',
   must_change_password INTEGER DEFAULT 1,
+  -- Brute-force protection: failed logins count up, and 5 failures lock
+  -- the account until locked_until (ISO timestamp). See routes/admin.js.
+  failed_attempts INTEGER DEFAULT 0,
+  locked_until TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -466,6 +470,19 @@ async function migrate(db) {
   ];
   for (const [name, sql] of newUserColumns) {
     if (!userNames.has(name)) {
+      await db.prepare(sql).run();
+    }
+  }
+
+  // Admin brute-force protection columns (added 2026-11-24).
+  const adminCols = await db.prepare('PRAGMA table_info(admin_users)').all();
+  const adminNames = new Set(adminCols.map((c) => c.name));
+  const newAdminColumns = [
+    ['failed_attempts', 'ALTER TABLE admin_users ADD COLUMN failed_attempts INTEGER DEFAULT 0'],
+    ['locked_until', 'ALTER TABLE admin_users ADD COLUMN locked_until TEXT']
+  ];
+  for (const [name, sql] of newAdminColumns) {
+    if (!adminNames.has(name)) {
       await db.prepare(sql).run();
     }
   }
