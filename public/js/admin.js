@@ -54,14 +54,20 @@ function fmtMonth(value) {
   return d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
 }
 
-/** Prettify an event-type key: 'fn_wedding' -> 'Wedding'; plain text passes through. */
+/** Human label for a booking's event type. Known 'fn_*' types translate
+ * through the event.* keys (same terms as the customer site); a custom
+ * type (free text the customer typed) passes through untranslated, and
+ * an unknown key is prettified the old way ('fn_wedding' -> 'Wedding'). */
 function eventLabel(booking) {
   if (!booking) return '—';
   if (booking.eventType === 'other' || booking.eventType === 'fn_other') {
-    return booking.customEventType || 'Other';
+    return booking.customEventType || t('event.other');
   }
-  const t = String(booking.eventType || '');
-  return t.replace(/^fn_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) || '—';
+  const raw = String(booking.eventType || '');
+  const key = 'event.' + raw.replace(/^fn_/, '');
+  const label = t(key);
+  if (label !== key) return label;
+  return raw.replace(/^fn_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) || '—';
 }
 
 function debounce(fn, ms) {
@@ -114,7 +120,7 @@ async function api(path, { method = 'GET', body = null, formData = null, noAuthR
   try {
     res = await fetch(path, opts);
   } catch (err) {
-    throw new ApiError(0, 'Could not reach the server. Please check your connection and try again.');
+    throw new ApiError(0, t('auth.server_unreachable_conn'));
   }
 
   let data = null;
@@ -126,11 +132,11 @@ async function api(path, { method = 'GET', body = null, formData = null, noAuthR
   if (res.status === 401) {
     // Auth calls (login / forgot / change-password / initial /me check) handle
     // 401 themselves so the server message can be shown instead of a redirect.
-    if (!noAuthRedirect) showLogin('Your session expired. Please sign in again.');
-    throw new ApiError(401, (data && (data.message || data.error)) || 'Session expired');
+    if (!noAuthRedirect) showLogin(t('auth.session_expired'));
+    throw new ApiError(401, (data && (data.message || data.error)) || t('auth.session_expired_short'));
   }
   if (!res.ok || (data && data.ok === false)) {
-    const message = (data && (data.message || data.error)) || `Request failed (${res.status})`;
+    const message = (data && (data.message || data.error)) || t('auth.request_failed', { status: res.status });
     throw new ApiError(res.status, message);
   }
   return data || {};
@@ -154,19 +160,21 @@ const state = {
   loaded: {},            // section -> true once loaded (for lazy loading)
 };
 
+// Section -> i18n key; resolved with t() wherever the title is shown
+// (topbar). Key-existence checks (showPortal / hashchange) still work.
 const SECTION_TITLES = {
-  dashboard: 'Dashboard',
-  bookings: 'Bookings',
-  items: 'Menu Items',
-  categories: 'Categories',
-  services: 'Services',
-  customers: 'Customers',
-  inquiries: 'Inquiries',
-  reviews: 'Reviews',
-  settings: 'Business Settings',
-  admins: 'Admins',
-  outbox: 'Outbox',
-  audit: 'Audit Log',
+  dashboard: 'nav.dashboard',
+  bookings: 'nav.bookings',
+  items: 'nav.items',
+  categories: 'nav.categories',
+  services: 'nav.services',
+  customers: 'nav.customers',
+  inquiries: 'nav.inquiries',
+  reviews: 'nav.reviews',
+  settings: 'nav.settings_title',
+  admins: 'nav.admins',
+  outbox: 'nav.outbox',
+  audit: 'nav.audit',
 };
 
 /* ============================== UI primitives ============================== */
@@ -212,7 +220,7 @@ function showSectionError(id, message, retryFn) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'retry-link';
-    btn.textContent = 'Retry';
+    btn.textContent = t('common.retry');
     btn.addEventListener('click', retryFn);
     el.appendChild(btn);
   }
@@ -235,7 +243,7 @@ function closeAllModals() {
 
 /** Styled confirm dialog. Resolves true when the user confirms. */
 let confirmResolver = null;
-function confirmDialog(title, message, okLabel = 'Confirm') {
+function confirmDialog(title, message, okLabel = t('common.confirm')) {
   return new Promise((resolve) => {
     confirmResolver = resolve;
     $('confirm-modal-title').textContent = title;
@@ -257,7 +265,7 @@ function setBusy(button, busy, busyLabel) {
   if (!button) return;
   if (busy) {
     button.dataset.label = button.innerHTML;
-    button.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;"></span> ' + esc(busyLabel || 'Please wait…');
+    button.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;"></span> ' + esc(busyLabel || t('common.please_wait'));
     button.disabled = true;
   } else {
     if (button.dataset.label) button.innerHTML = button.dataset.label;
@@ -296,8 +304,8 @@ function showChangePassword(voluntary = false) {
   showAuthForm('change-password-form');
   hideAlert('change-password-error');
   $('change-password-note').textContent = voluntary
-    ? 'Choose a new password for your admin account.'
-    : 'You must change your password before continuing.';
+    ? t('auth.change_pw_note_voluntary')
+    : t('auth.change_pw_note_forced');
   $('change-password-back').hidden = !voluntary;
   $('change-old-password').value = '';
   $('change-new-password').value = '';
@@ -324,21 +332,21 @@ async function handleChangeEmail(event) {
   const newEmail = $('change-new-email').value.trim();
   const password = $('change-email-password').value;
   if (!newEmail || !password) {
-    showInlineError('change-email-error', 'Please enter the new email and your current password.');
+    showInlineError('change-email-error', t('auth.err_enter_email_pw_change'));
     return;
   }
   const btn = $('change-email-submit');
-  setBusy(btn, true, 'Changing…');
+  setBusy(btn, true, t('busy.changing'));
   try {
     const data = await api('/api/admin/auth/change-email', {
       method: 'POST',
       body: { newEmail, password }
     });
     state.admin = data.admin;
-    toast('Email changed. Use the new email to sign in from now on.', 'success');
+    showToast(t('auth.email_changed'), 'success');
     showPortal();
   } catch (err) {
-    showInlineError('change-email-error', err.userMessage || 'Could not change the email.');
+    showInlineError('change-email-error', err.userMessage || t('auth.err_change_email'));
   } finally {
     setBusy(btn, false);
   }
@@ -349,7 +357,7 @@ function showPortal() {
   $('portal-view').hidden = false;
   const label = state.admin
     ? (state.admin.name ? `${state.admin.name} (${state.admin.email})` : state.admin.email)
-    : 'Admin';
+    : t('nav.admin_fallback');
   $('admin-user-label').textContent = label;
   const hashSection = (location.hash || '').replace(/^#\/?/, '');
   showSection(SECTION_TITLES[hashSection] ? hashSection : 'dashboard', { updateHash: false });
@@ -370,7 +378,7 @@ async function checkSession(loginMessage) {
       showLogin(loginMessage);
     } else {
       // Server unreachable: still show login with a hint.
-      showLogin('Could not reach the server. Please try again.');
+      showLogin(t('auth.server_unreachable'));
     }
   }
 }
@@ -393,10 +401,10 @@ function initAdminGoogleLogin() {
   if (!reason) return null;
   history.replaceState(null, '', location.pathname + location.hash);
   const messages = {
-    'not-admin': 'This Google account does not have admin access. Sign in with the Google account that matches your admin email, or use your email and password.',
-    locked: 'This admin account is locked for 15 minutes after too many wrong password attempts. Please try again later.',
-    denied: 'Google sign-in was cancelled.',
-    error: 'Google sign-in failed. Please try again, or sign in with your email and password.'
+    'not-admin': t('auth.google_not_admin'),
+    locked: t('auth.google_locked'),
+    denied: t('auth.google_denied'),
+    error: t('auth.google_error')
   };
   return messages[reason] || messages.error;
 }
@@ -408,11 +416,11 @@ async function handleLogin(event) {
   const email = $('login-email').value.trim();
   const password = $('login-password').value;
   if (!email || !password) {
-    showInlineError('login-error', 'Please enter your email and password.');
+    showInlineError('login-error', t('auth.err_enter_email_pw'));
     return;
   }
   const btn = $('login-submit');
-  setBusy(btn, true, 'Signing in…');
+  setBusy(btn, true, t('busy.signing_in'));
   try {
     const data = await api('/api/admin/auth/login', {
       method: 'POST',
@@ -424,7 +432,7 @@ async function handleLogin(event) {
     if (state.admin && state.admin.mustChangePassword) {
       showChangePassword();
     } else {
-      showToast('Signed in successfully.');
+      showToast(t('auth.signed_in'));
       showPortal();
     }
   } catch (err) {
@@ -443,11 +451,11 @@ async function handleForgotPassword(event) {
   hideAlert('forgot-info');
   const email = $('forgot-email').value.trim();
   if (!email) {
-    showInlineError('forgot-error', 'Please enter your email address.');
+    showInlineError('forgot-error', t('auth.err_enter_email'));
     return;
   }
   const btn = $('forgot-submit');
-  setBusy(btn, true, 'Sending…');
+  setBusy(btn, true, t('busy.sending'));
   try {
     const data = await api('/api/admin/auth/forgot-password', {
       method: 'POST',
@@ -456,7 +464,7 @@ async function handleForgotPassword(event) {
     });
     // Server message may include the CLI-reset hint when resetViaCli is true.
     const info = $('forgot-info');
-    info.textContent = data.message || 'If that email belongs to an admin account, reset instructions have been sent.';
+    info.textContent = data.message || t('auth.forgot_fallback');
     info.hidden = false;
   } catch (err) {
     if (err instanceof ApiError) {
@@ -474,27 +482,27 @@ async function handleChangePassword(event) {
   const newPassword = $('change-new-password').value;
   const confirm = $('change-confirm-password').value;
   if (newPassword.length < 8) {
-    showInlineError('change-password-error', 'The new password must be at least 8 characters long.');
+    showInlineError('change-password-error', t('auth.err_pw_short'));
     return;
   }
   if (newPassword !== confirm) {
-    showInlineError('change-password-error', 'The new passwords do not match.');
+    showInlineError('change-password-error', t('auth.err_pw_mismatch'));
     return;
   }
   const btn = $('change-password-submit');
-  setBusy(btn, true, 'Changing password…');
+  setBusy(btn, true, t('busy.changing_pw'));
   try {
     await api('/api/admin/auth/change-password', {
       method: 'POST',
       body: { oldPassword, newPassword },
       noAuthRedirect: true,
     });
-    showToast('Password changed successfully.');
+    showToast(t('auth.pw_changed'));
     // Re-check the session so mustChangePassword is refreshed.
     const data = await api('/api/admin/auth/me', { noAuthRedirect: true });
     state.admin = data.admin;
     if (state.admin && state.admin.mustChangePassword) {
-      showInlineError('change-password-error', 'The password change did not take effect. Please try again.');
+      showInlineError('change-password-error', t('auth.err_pw_not_changed'));
       return;
     }
     showPortal();
@@ -527,15 +535,15 @@ async function handleResetPassword(event) {
   const newPassword = $('reset-new-password').value;
   const confirm = $('reset-confirm-password').value;
   if (newPassword.length < 8) {
-    showInlineError('reset-password-error', 'The new password must be at least 8 characters long.');
+    showInlineError('reset-password-error', t('auth.err_pw_short'));
     return;
   }
   if (newPassword !== confirm) {
-    showInlineError('reset-password-error', 'The new passwords do not match.');
+    showInlineError('reset-password-error', t('auth.err_pw_mismatch'));
     return;
   }
   const btn = $('reset-password-submit');
-  setBusy(btn, true, 'Resetting password…');
+  setBusy(btn, true, t('busy.resetting_pw'));
   try {
     await api('/api/admin/auth/reset-password', {
       method: 'POST',
@@ -547,9 +555,9 @@ async function handleResetPassword(event) {
     history.replaceState(null, '', location.pathname);
     showLogin();
     const info = $('login-info');
-    info.textContent = 'Password reset successfully. Please sign in with your new password.';
+    info.textContent = t('auth.pw_reset_signin');
     info.hidden = false;
-    showToast('Password reset successfully.');
+    showToast(t('auth.pw_reset_done'));
   } catch (err) {
     if (err instanceof ApiError) {
       showInlineError('reset-password-error', err.message);
@@ -566,7 +574,7 @@ async function handleLogout() {
     // Logout is best-effort; always return to the login screen.
   }
   showLogin();
-  showToast('Signed out.');
+  showToast(t('auth.signed_out'));
 }
 
 /* ============================== Section switching ============================== */
@@ -576,7 +584,7 @@ function showSection(name, { updateHash = true } = {}) {
   state.section = name;
   document.querySelectorAll('.view-section').forEach((s) => s.classList.toggle('active', s.id === 'section-' + name));
   document.querySelectorAll('.sidebar-nav .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.section === name));
-  $('section-title').textContent = SECTION_TITLES[name];
+  $('section-title').textContent = t(SECTION_TITLES[name]);
   closeSidebar();
   if (updateHash) {
     const target = '#/' + name;
@@ -612,9 +620,19 @@ function closeSidebar() {
 
 /* ============================== Dashboard ============================== */
 
+/** Translate a status code ('pending', 'new', 'sent', …); unknown codes
+ * pass through untranslated (the badge class always uses the raw code). */
+function statusLabel(status) {
+  const s = String(status || '').toLowerCase();
+  if (!s) return '—';
+  const key = 'status.' + s;
+  const label = t(key);
+  return label === key ? s : label;
+}
+
 function statusBadge(status) {
   const s = String(status || '').toLowerCase();
-  return `<span class="badge badge-${esc(s)}">${esc(s || '—')}</span>`;
+  return `<span class="badge badge-${esc(s)}">${esc(statusLabel(s))}</span>`;
 }
 
 function listEmpty(ul, text) {
@@ -649,7 +667,7 @@ async function loadDashboard() {
     const recentBody = $('dashboard-recent-bookings');
     const recent = Array.isArray(data.recentBookings) ? data.recentBookings.slice(0, 5) : [];
     if (recent.length === 0) {
-      recentBody.innerHTML = '<tr><td colspan="6" class="cell-muted">No bookings yet.</td></tr>';
+      recentBody.innerHTML = '<tr><td colspan="6" class="cell-muted">' + esc(t('dash.no_bookings')) + '</td></tr>';
     } else {
       recentBody.innerHTML = recent.map((b) => `
         <tr class="row-link" data-booking-id="${esc(b.id)}">
@@ -669,12 +687,12 @@ async function loadDashboard() {
     const inqList = $('dashboard-pending-inquiries');
     const inqs = Array.isArray(data.recentInquiries) ? data.recentInquiries : [];
     if (inqs.length === 0) {
-      listEmpty(inqList, 'No pending inquiries.');
+      listEmpty(inqList, t('dash.no_inquiries'));
     } else {
       inqList.innerHTML = inqs.map((q) => `
         <li>
           <span><strong>${esc(q.name || '—')}</strong><br><span class="list-sub">${esc(eventLabel(q))} · ${esc(fmtDate(q.eventDate))}</span></span>
-          <button type="button" class="btn btn-xs btn-secondary" data-inquiry-id="${esc(q.id)}">View</button>
+          <button type="button" class="btn btn-xs btn-secondary" data-inquiry-id="${esc(q.id)}">${t('common.view')}</button>
         </li>`).join('');
       inqList.querySelectorAll('button[data-inquiry-id]').forEach((btn) => {
         btn.addEventListener('click', () => openInquiryDetail(btn.dataset.inquiryId));
@@ -685,7 +703,7 @@ async function loadDashboard() {
     const revList = $('dashboard-monthly-revenue');
     const monthly = Array.isArray(data.monthlyRevenue) ? data.monthlyRevenue : [];
     if (monthly.length === 0) {
-      listEmpty(revList, 'No revenue recorded yet.');
+      listEmpty(revList, t('dash.no_revenue'));
     } else {
       revList.innerHTML = monthly.map((r) => `
         <li><span>${esc(fmtMonth(r.month))}</span><strong>${esc(money(r.total))}</strong></li>`).join('');
@@ -695,29 +713,29 @@ async function loadDashboard() {
     const popList = $('dashboard-popular-items');
     const popular = Array.isArray(data.popularItems) ? data.popularItems.slice(0, 5) : [];
     if (popular.length === 0) {
-      listEmpty(popList, 'No items ordered yet.');
+      listEmpty(popList, t('dash.no_items'));
     } else {
       popList.innerHTML = popular.map((p) => `
-        <li><span>${esc(p.name)}</span><strong>${esc(num(p.count))} times</strong></li>`).join('');
+        <li><span>${esc(p.name)}</span><strong>${esc(t('dash.times', { count: num(p.count) }))}</strong></li>`).join('');
     }
 
     // Upcoming events (next 5)
     const upList = $('dashboard-upcoming-events');
     const upcoming = Array.isArray(data.upcomingEvents) ? data.upcomingEvents.slice(0, 5) : [];
     if (upcoming.length === 0) {
-      listEmpty(upList, 'No upcoming events scheduled.');
+      listEmpty(upList, t('dash.no_events'));
     } else {
       upList.innerHTML = upcoming.map((b) => `
         <li>
           <span><strong>${esc(fmtDate(b.eventDate))}</strong> — ${esc(eventLabel(b))} (${esc(b.customerName || '—')})</span>
-          <strong>${esc(num(b.guests))} guests</strong>
+          <strong>${esc(t('common.guests_count', { count: num(b.guests) }))}</strong>
         </li>`).join('');
     }
 
     $('dashboard-content').hidden = false;
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('dashboard-error', err.message || 'Failed to load the dashboard.', loadDashboard);
+    showSectionError('dashboard-error', err.message || t('dash.load_fail'), loadDashboard);
   } finally {
     setLoading('dashboard-loading', false);
   }
@@ -761,7 +779,7 @@ async function loadBookings() {
           <td>${esc(num(b.guests))}</td>
           <td class="cell-nowrap">${esc(money(b.grandTotal))}</td>
           <td>${statusBadge(b.status)}</td>
-          <td class="cell-actions"><button type="button" class="btn btn-xs btn-secondary" data-booking-id="${esc(b.id)}">View</button> <button type="button" class="btn btn-xs btn-danger" data-delete-booking-id="${esc(b.id)}" data-quote="${esc(b.quoteNumber || b.id)}">Delete</button></td>
+          <td class="cell-actions"><button type="button" class="btn btn-xs btn-secondary" data-booking-id="${esc(b.id)}">${t('common.view')}</button> <button type="button" class="btn btn-xs btn-danger" data-delete-booking-id="${esc(b.id)}" data-quote="${esc(b.quoteNumber || b.id)}">${t('common.delete')}</button></td>
         </tr>`).join('');
       body.querySelectorAll('button[data-booking-id]').forEach((btn) => {
         btn.addEventListener('click', () => openBookingDetail(btn.dataset.bookingId));
@@ -772,7 +790,7 @@ async function loadBookings() {
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('bookings-error', err.message || 'Failed to load bookings.', loadBookings);
+    showSectionError('bookings-error', err.message || t('bookings.load_fail'), loadBookings);
   } finally {
     setLoading('bookings-loading', false);
   }
@@ -787,32 +805,32 @@ function bookingAddress(b) {
 
 async function openBookingDetail(id) {
   const modalBody = $('booking-modal-body');
-  $('booking-modal-title').textContent = 'Booking';
-  modalBody.innerHTML = '<div class="loading-row"><span class="spinner"></span> Loading booking…</div>';
+  $('booking-modal-title').textContent = t('bookings.title');
+  modalBody.innerHTML = '<div class="loading-row"><span class="spinner"></span> ' + esc(t('loading.booking')) + '</div>';
   $('booking-print-link').href = '#';
   openModal('booking-modal');
   try {
     const data = await api('/api/admin/bookings/' + encodeURIComponent(id));
     const b = data.booking || data;
     state.currentBooking = b;
-    $('booking-modal-title').textContent = 'Quotation ' + (b.quoteNumber || b.id);
+    $('booking-modal-title').textContent = t('bookings.quotation_title', { quote: b.quoteNumber || b.id });
     $('booking-print-link').href = '/api/quotations/' + encodeURIComponent(b.id);
 
     const items = Array.isArray(b.items) ? b.items : [];
     const services = Array.isArray(b.services) ? b.services : [];
     const itemRows = items.length === 0
-      ? '<tr><td colspan="4" class="cell-muted">No menu items selected.</td></tr>'
+      ? '<tr><td colspan="4" class="cell-muted">' + esc(t('bookings.no_items')) + '</td></tr>'
       : items.map((it) => {
           const qty = it.qtyIsGuests ? num(b.guests) : num(it.quantity, 1);
           return `<tr>
             <td>${esc(it.itemName)}</td>
             <td class="num">${esc(money(it.unitPrice))}</td>
-            <td class="num">${it.qtyIsGuests ? esc(num(b.guests)) + ' guests' : esc(qty)}</td>
+            <td class="num">${it.qtyIsGuests ? esc(t('common.guests_count', { count: num(b.guests) })) : esc(qty)}</td>
             <td class="num">${esc(money(it.lineTotal ?? num(it.unitPrice) * qty))}</td>
           </tr>`;
         }).join('');
     const serviceRows = services.length === 0
-      ? '<tr><td colspan="4" class="cell-muted">No services selected.</td></tr>'
+      ? '<tr><td colspan="4" class="cell-muted">' + esc(t('bookings.no_services')) + '</td></tr>'
       : services.map((s) => `<tr>
           <td>${esc(s.serviceName)}</td>
           <td class="num">${esc(money(s.unitPrice))}</td>
@@ -823,69 +841,69 @@ async function openBookingDetail(id) {
     const statuses = ['pending', 'confirmed', 'completed', 'cancelled'];
     modalBody.innerHTML = `
       <div class="detail-grid">
-        <p><span class="detail-label">Customer</span>${esc(b.customerName)}<br><span class="cell-muted">${esc(b.customerPhone || '')}</span></p>
-        <p><span class="detail-label">Status</span>${statusBadge(b.status)}</p>
-        <p><span class="detail-label">Event</span>${esc(eventLabel(b))}</p>
-        <p><span class="detail-label">Event date</span>${esc(fmtDate(b.eventDate))}</p>
-        <p><span class="detail-label">Guests</span>${esc(num(b.guests))}</p>
-        <p><span class="detail-label">Booked on</span>${esc(fmtDateTime(b.createdAt))}</p>
-        <p style="grid-column: 1 / -1;"><span class="detail-label">Venue</span>${esc(bookingAddress(b))}</p>
-        ${b.notes ? `<p style="grid-column: 1 / -1;"><span class="detail-label">Notes</span>${esc(b.notes)}</p>` : ''}
+        <p><span class="detail-label">${t('bookings.customer')}</span>${esc(b.customerName)}<br><span class="cell-muted">${esc(b.customerPhone || '')}</span></p>
+        <p><span class="detail-label">${t('bookings.status')}</span>${statusBadge(b.status)}</p>
+        <p><span class="detail-label">${t('bookings.event')}</span>${esc(eventLabel(b))}</p>
+        <p><span class="detail-label">${t('bookings.event_date')}</span>${esc(fmtDate(b.eventDate))}</p>
+        <p><span class="detail-label">${t('bookings.guests')}</span>${esc(num(b.guests))}</p>
+        <p><span class="detail-label">${t('bookings.booked_on')}</span>${esc(fmtDateTime(b.createdAt))}</p>
+        <p style="grid-column: 1 / -1;"><span class="detail-label">${t('bookings.venue')}</span>${esc(bookingAddress(b))}</p>
+        ${b.notes ? `<p style="grid-column: 1 / -1;"><span class="detail-label">${t('bookings.notes')}</span>${esc(b.notes)}</p>` : ''}
       </div>
 
-      <h4 class="detail-section-title">Menu Items</h4>
+      <h4 class="detail-section-title">${t('bookings.menu_items')}</h4>
       <table class="bill-table">
-        <thead><tr><th>Item</th><th class="num">Price</th><th class="num">Qty</th><th class="num">Total</th></tr></thead>
+        <thead><tr><th>${t('th.item')}</th><th class="num">${t('th.price')}</th><th class="num">${t('th.qty')}</th><th class="num">${t('th.total')}</th></tr></thead>
         <tbody>${itemRows}</tbody>
       </table>
 
-      <h4 class="detail-section-title">Services</h4>
+      <h4 class="detail-section-title">${t('bookings.services')}</h4>
       <table class="bill-table">
-        <thead><tr><th>Service</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">Total</th></tr></thead>
+        <thead><tr><th>${t('th.service')}</th><th class="num">${t('th.unit_price')}</th><th class="num">${t('th.qty')}</th><th class="num">${t('th.total')}</th></tr></thead>
         <tbody>${serviceRows}</tbody>
       </table>
 
-      <h4 class="detail-section-title">Billing Breakdown</h4>
+      <h4 class="detail-section-title">${t('bookings.billing')}</h4>
       <table class="bill-table">
         <tbody>
-          <tr><td>Food total</td><td class="num">${esc(money(b.foodTotal))}</td></tr>
-          <tr><td>Services total</td><td class="num">${esc(money(b.servicesTotal))}</td></tr>
-          <tr><td>Transport</td><td class="num">${esc(money(b.transportTotal))}</td></tr>
-          <tr><td>Service charge${b.serviceChargeRate != null ? ` (${esc(num(b.serviceChargeRate))}%)` : ''}</td><td class="num">${esc(money(b.serviceCharge))}</td></tr>
-          <tr><td>GST${b.taxRate != null ? ` (${esc(num(b.taxRate))}%)` : ''}</td><td class="num">${esc(money(b.gstAmount))}</td></tr>
-          <tr class="total-row"><td>Grand total</td><td class="num">${esc(money(b.grandTotal))}</td></tr>
+          <tr><td>${t('bookings.food_total')}</td><td class="num">${esc(money(b.foodTotal))}</td></tr>
+          <tr><td>${t('bookings.services_total')}</td><td class="num">${esc(money(b.servicesTotal))}</td></tr>
+          <tr><td>${t('bookings.transport')}</td><td class="num">${esc(money(b.transportTotal))}</td></tr>
+          <tr><td>${t('bookings.service_charge')}${b.serviceChargeRate != null ? ` (${esc(num(b.serviceChargeRate))}%)` : ''}</td><td class="num">${esc(money(b.serviceCharge))}</td></tr>
+          <tr><td>${t('bookings.gst')}${b.taxRate != null ? ` (${esc(num(b.taxRate))}%)` : ''}</td><td class="num">${esc(money(b.gstAmount))}</td></tr>
+          <tr class="total-row"><td>${t('bookings.grand_total')}</td><td class="num">${esc(money(b.grandTotal))}</td></tr>
         </tbody>
       </table>
 
       <div class="booking-status-form">
         <div id="booking-update-error" class="alert alert-error" hidden></div>
-        <label class="form-label" for="booking-status-select">Change status</label>
+        <label class="form-label" for="booking-status-select">${t('bookings.change_status')}</label>
         <select id="booking-status-select" class="form-input">
-          ${statuses.map((s) => `<option value="${s}"${s === b.status ? ' selected' : ''}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('')}
+          ${statuses.map((s) => `<option value="${s}"${s === b.status ? ' selected' : ''}>${statusLabel(s)}</option>`).join('')}
         </select>
-        <label class="form-label" for="booking-notes-input">Notes</label>
-        <textarea id="booking-notes-input" class="form-input" rows="2" placeholder="Internal notes about this booking…">${esc(b.notes || '')}</textarea>
-        <button type="button" id="booking-save-btn" class="btn btn-primary" style="margin-top:12px;">Save Changes</button>
+        <label class="form-label" for="booking-notes-input">${t('bookings.notes')}</label>
+        <textarea id="booking-notes-input" class="form-input" rows="2" placeholder="${esc(t('bookings.notes_ph'))}">${esc(b.notes || '')}</textarea>
+        <button type="button" id="booking-save-btn" class="btn btn-primary" style="margin-top:12px;">${t('bookings.save_changes')}</button>
       </div>`;
 
     $('booking-save-btn').addEventListener('click', saveBookingChanges);
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    modalBody.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to load this booking.')}</div>`;
+    modalBody.innerHTML = `<div class="alert alert-error">${esc(err.message || t('bookings.load_fail_one'))}</div>`;
   }
 }
 
 async function deleteBooking(id, quoteNumber) {
-  const ok = await confirmDialog('Delete Booking', `Permanently delete booking ${quoteNumber || id}? This removes the booking and its food/service lines, and cannot be undone. To keep the record, cancel the booking instead (open it and change its status to Cancelled).`, 'Delete');
+  const ok = await confirmDialog(t('bookings.delete_title'), t('bookings.delete_msg', { quote: quoteNumber || id }), t('common.delete'));
   if (!ok) return;
   try {
     await api('/api/admin/bookings/' + encodeURIComponent(id), { method: 'DELETE' });
-    showToast('Booking deleted.');
+    showToast(t('bookings.deleted'));
     loadBookings();
     if (state.section === 'dashboard') loadDashboard();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showToast(err.message || 'Failed to delete the booking.', 'error');
+    showToast(err.message || t('bookings.delete_fail'), 'error');
   }
 }
 
@@ -898,26 +916,26 @@ async function saveBookingChanges() {
   const statusChanged = status !== b.status;
   if (statusChanged) {
     const ok = await confirmDialog(
-      'Change Status',
-      `Change booking ${b.quoteNumber || b.id} from "${b.status}" to "${status}"?`,
-      'Change Status'
+      t('bookings.change_status_title'),
+      t('bookings.change_status_msg', { quote: b.quoteNumber || b.id, from: statusLabel(b.status), to: statusLabel(status) }),
+      t('bookings.change_status_title')
     );
     if (!ok) return;
   }
   const btn = $('booking-save-btn');
-  setBusy(btn, true, 'Saving…');
+  setBusy(btn, true, t('busy.saving'));
   try {
     await api('/api/admin/bookings/' + encodeURIComponent(b.id), {
       method: 'PATCH',
       body: { status, notes },
     });
-    showToast('Booking updated.');
+    showToast(t('bookings.updated'));
     closeModal('booking-modal');
     loadBookings();
     if (state.section === 'dashboard') loadDashboard();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showInlineError('booking-update-error', err.message || 'Failed to update the booking.');
+    showInlineError('booking-update-error', err.message || t('bookings.update_fail'));
   } finally {
     setBusy(btn, false);
   }
@@ -944,7 +962,7 @@ function categoryName(cat, lang = 'en') {
 function populateCategorySelects(selectedId = '') {
   const filter = $('items-category-filter');
   const currentFilter = filter.value;
-  filter.innerHTML = '<option value="">All categories</option>' + state.categories.map((c) =>
+  filter.innerHTML = '<option value="">' + esc(t('cat.all')) + '</option>' + state.categories.map((c) =>
     `<option value="${esc(c.id)}">${esc(categoryName(c))}</option>`).join('');
   filter.value = currentFilter;
 
@@ -973,10 +991,10 @@ async function loadCategories() {
           <td><strong>${esc(name.en || '—')}</strong></td>
           <td>${esc(name.te || '—')}</td>
           <td>${esc(name.hi || '—')}</td>
-          <td><span class="badge ${active ? 'badge-yes' : 'badge-no'}">${active ? 'Active' : 'Inactive'}</span></td>
+          <td><span class="badge ${active ? 'badge-yes' : 'badge-no'}">${active ? t('cat.active') : t('cat.inactive')}</span></td>
           <td class="cell-actions">
-            <button type="button" class="btn btn-xs btn-secondary" data-edit-category="${esc(c.id)}">Edit</button>
-            <button type="button" class="btn btn-xs btn-danger" data-delete-category="${esc(c.id)}" data-category-name="${esc(name.en || '')}">Delete</button>
+            <button type="button" class="btn btn-xs btn-secondary" data-edit-category="${esc(c.id)}">${t('common.edit')}</button>
+            <button type="button" class="btn btn-xs btn-danger" data-delete-category="${esc(c.id)}" data-category-name="${esc(name.en || '')}">${t('common.delete')}</button>
           </td>
         </tr>`;
       }).join('');
@@ -989,7 +1007,7 @@ async function loadCategories() {
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('categories-error', err.message || 'Failed to load categories.', loadCategories);
+    showSectionError('categories-error', err.message || t('cat.load_fail'), loadCategories);
   } finally {
     setLoading('categories-loading', false);
   }
@@ -1000,12 +1018,12 @@ function openCategoryForm(id) {
   const form = $('category-form');
   form.reset();
   $('category-id').value = '';
-  $('category-modal-title').textContent = 'Add Category';
+  $('category-modal-title').textContent = t('cat.add');
   $('category-is-active').checked = true;
   if (id) {
     const c = state.categoryMap[id];
     if (!c) return;
-    $('category-modal-title').textContent = 'Edit Category';
+    $('category-modal-title').textContent = t('cat.edit');
     $('category-id').value = c.id;
     const name = (c.name && typeof c.name === 'object') ? c.name : { en: c.nameEn || '', te: c.nameTe || '', hi: c.nameHi || '' };
     $('category-name-en').value = name.en || '';
@@ -1023,7 +1041,7 @@ async function saveCategory(event) {
   const id = $('category-id').value;
   const nameEn = $('category-name-en').value.trim();
   if (!nameEn) {
-    showInlineError('category-form-error', 'Please enter an English category name.');
+    showInlineError('category-form-error', t('cat.err_name'));
     return;
   }
   const payload = {
@@ -1034,36 +1052,36 @@ async function saveCategory(event) {
     isActive: $('category-is-active').checked,
   };
   const btn = $('category-save-btn');
-  setBusy(btn, true, 'Saving…');
+  setBusy(btn, true, t('busy.saving'));
   try {
     if (id) {
       await api('/api/admin/categories/' + encodeURIComponent(id), { method: 'PUT', body: payload });
-      showToast('Category updated.');
+      showToast(t('cat.updated'));
     } else {
       await api('/api/admin/categories', { method: 'POST', body: payload });
-      showToast('Category added.');
+      showToast(t('cat.added'));
     }
     closeModal('category-modal');
     loadCategories();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showInlineError('category-form-error', err.message || 'Failed to save the category.');
+    showInlineError('category-form-error', err.message || t('cat.save_fail'));
   } finally {
     setBusy(btn, false);
   }
 }
 
 async function deleteCategory(id, name) {
-  const ok = await confirmDialog('Delete Category', `Delete the category "${name || id}"? This cannot be undone.`, 'Delete');
+  const ok = await confirmDialog(t('cat.delete_title'), t('cat.delete_msg', { name: name || id }), t('common.delete'));
   if (!ok) return;
   try {
     await api('/api/admin/categories/' + encodeURIComponent(id), { method: 'DELETE' });
-    showToast('Category deleted.');
+    showToast(t('cat.deleted'));
     loadCategories();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
     // 409 when items still exist in the category — show the server message.
-    showToast(err.message || 'Failed to delete the category.', 'error');
+    showToast(err.message || t('cat.delete_fail'), 'error');
   }
 }
 
@@ -1118,11 +1136,11 @@ async function loadItems() {
           <td><strong>${esc(itemName(it))}</strong></td>
           <td>${esc(categoryName(state.categoryMap[it.categoryId]))}</td>
           <td class="cell-nowrap">${esc(money(it.price))}</td>
-          <td><span class="badge ${it.isVeg ? 'badge-veg' : 'badge-nonveg'}">${it.isVeg ? 'Veg' : 'Non-Veg'}</span></td>
-          <td><span class="badge ${it.isAvailable !== false ? 'badge-yes' : 'badge-no'}">${it.isAvailable !== false ? 'Yes' : 'No'}</span></td>
+          <td><span class="badge ${it.isVeg ? 'badge-veg' : 'badge-nonveg'}">${it.isVeg ? t('items.veg') : t('items.nonveg')}</span></td>
+          <td><span class="badge ${it.isAvailable !== false ? 'badge-yes' : 'badge-no'}">${it.isAvailable !== false ? t('common.yes') : t('common.no')}</span></td>
           <td class="cell-actions">
-            <button type="button" class="btn btn-xs btn-secondary" data-edit-item="${esc(it.id)}">Edit</button>
-            <button type="button" class="btn btn-xs btn-danger" data-delete-item="${esc(it.id)}" data-item-name="${esc(itemName(it))}">Delete</button>
+            <button type="button" class="btn btn-xs btn-secondary" data-edit-item="${esc(it.id)}">${t('common.edit')}</button>
+            <button type="button" class="btn btn-xs btn-danger" data-delete-item="${esc(it.id)}" data-item-name="${esc(itemName(it))}">${t('common.delete')}</button>
           </td>
         </tr>`;
       }).join('');
@@ -1135,7 +1153,7 @@ async function loadItems() {
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('items-error', err.message || 'Failed to load menu items.', loadItems);
+    showSectionError('items-error', err.message || t('items.load_fail'), loadItems);
   } finally {
     setLoading('items-loading', false);
   }
@@ -1146,7 +1164,7 @@ function resetItemImagePreview() {
   $('item-image-file').value = '';
   $('item-image-preview').hidden = true;
   $('item-image-preview').src = '';
-  $('item-image-status').textContent = 'No image selected';
+  $('item-image-status').textContent = t('items.no_image');
 }
 
 function openItemForm(id) {
@@ -1155,14 +1173,14 @@ function openItemForm(id) {
   form.reset();
   resetItemImagePreview();
   $('item-id').value = '';
-  $('item-modal-title').textContent = 'Add Menu Item';
+  $('item-modal-title').textContent = t('items.add_title');
   $('item-is-veg').checked = true;
   $('item-is-available').checked = true;
   populateCategorySelects();
   if (id) {
     const it = state.items.find((x) => String(x.id) === String(id));
     if (!it) return;
-    $('item-modal-title').textContent = 'Edit Menu Item';
+    $('item-modal-title').textContent = t('items.edit_title');
     $('item-id').value = it.id;
     const name = (it.name && typeof it.name === 'object') ? it.name : { en: it.nameEn || '', te: it.nameTe || '', hi: it.nameHi || '' };
     const desc = (it.desc && typeof it.desc === 'object') ? it.desc : { en: it.descEn || '', te: it.descTe || '', hi: it.descHi || '' };
@@ -1181,7 +1199,7 @@ function openItemForm(id) {
     if (img) {
       $('item-image-preview').src = img;
       $('item-image-preview').hidden = false;
-      $('item-image-status').textContent = 'Current image';
+      $('item-image-status').textContent = t('items.current_image');
     }
   }
   openModal('item-modal');
@@ -1191,7 +1209,7 @@ function handleItemImageFile(input) {
   const file = input.files && input.files[0];
   if (!file) {
     state.itemImageFile = null;
-    $('item-image-status').textContent = 'No image selected';
+    $('item-image-status').textContent = t('items.no_image');
     return;
   }
   state.itemImageFile = file;
@@ -1199,7 +1217,7 @@ function handleItemImageFile(input) {
   reader.onload = (e) => {
     $('item-image-preview').src = e.target.result;
     $('item-image-preview').hidden = false;
-    $('item-image-status').textContent = 'New image selected — will upload on save';
+    $('item-image-status').textContent = t('items.new_image');
   };
   reader.readAsDataURL(file);
 }
@@ -1212,15 +1230,15 @@ async function saveItem(event) {
   const price = parseFloat($('item-price').value);
   const categoryId = $('item-category').value;
   if (!nameEn) {
-    showInlineError('item-form-error', 'Please enter an English item name.');
+    showInlineError('item-form-error', t('items.err_name'));
     return;
   }
   if (!categoryId) {
-    showInlineError('item-form-error', 'Please choose a category.');
+    showInlineError('item-form-error', t('items.err_category'));
     return;
   }
   if (!Number.isFinite(price) || price < 0) {
-    showInlineError('item-form-error', 'Please enter a valid price.');
+    showInlineError('item-form-error', t('items.err_price'));
     return;
   }
   const payload = {
@@ -1237,7 +1255,7 @@ async function saveItem(event) {
     imageUrl: $('item-image-url').value.trim(),
   };
   const btn = $('item-save-btn');
-  setBusy(btn, true, 'Saving…');
+  setBusy(btn, true, t('busy.saving'));
   try {
     let savedId = id;
     if (id) {
@@ -1254,30 +1272,30 @@ async function saveItem(event) {
         await api('/api/admin/items/' + encodeURIComponent(savedId) + '/image', { method: 'POST', formData });
       } catch (uploadErr) {
         if (uploadErr instanceof ApiError && uploadErr.status === 401) throw uploadErr;
-        showToast('Item saved, but the image upload failed: ' + uploadErr.message, 'error');
+        showToast(t('items.upload_fail', { error: uploadErr.message }), 'error');
       }
     }
-    showToast(id ? 'Menu item updated.' : 'Menu item added.');
+    showToast(id ? t('items.updated') : t('items.added'));
     closeModal('item-modal');
     loadItems();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showInlineError('item-form-error', err.message || 'Failed to save the menu item.');
+    showInlineError('item-form-error', err.message || t('items.save_fail'));
   } finally {
     setBusy(btn, false);
   }
 }
 
 async function deleteItem(id, name) {
-  const ok = await confirmDialog('Delete Menu Item', `Delete "${name || id}"? This cannot be undone.`, 'Delete');
+  const ok = await confirmDialog(t('items.delete_title'), t('items.delete_msg', { name: name || id }), t('common.delete'));
   if (!ok) return;
   try {
     await api('/api/admin/items/' + encodeURIComponent(id), { method: 'DELETE' });
-    showToast('Menu item deleted.');
+    showToast(t('items.deleted'));
     loadItems();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showToast(err.message || 'Failed to delete the menu item.', 'error');
+    showToast(err.message || t('items.delete_fail'), 'error');
   }
 }
 
@@ -1303,13 +1321,13 @@ async function loadServices() {
     } else {
       body.innerHTML = list.map((s) => `<tr>
         <td><strong>${esc(serviceName(s))}</strong></td>
-        <td>${esc(s.type === 'number' ? 'Number (count adjustable)' : 'Checkbox (flat fee)')}</td>
+        <td>${esc(s.type === 'number' ? t('svc.type_number') : t('svc.type_checkbox'))}</td>
         <td class="cell-nowrap">${esc(money(s.unitPrice))}</td>
         <td>${s.type === 'number' ? esc(num(s.defaultQuantity, 1)) : '—'}</td>
-        <td><span class="badge ${s.isAvailable !== false ? 'badge-yes' : 'badge-no'}">${s.isAvailable !== false ? 'Yes' : 'No'}</span></td>
+        <td><span class="badge ${s.isAvailable !== false ? 'badge-yes' : 'badge-no'}">${s.isAvailable !== false ? t('common.yes') : t('common.no')}</span></td>
         <td class="cell-actions">
-          <button type="button" class="btn btn-xs btn-secondary" data-edit-service="${esc(s.id)}">Edit</button>
-          <button type="button" class="btn btn-xs btn-danger" data-delete-service="${esc(s.id)}" data-service-name="${esc(serviceName(s))}">Delete</button>
+          <button type="button" class="btn btn-xs btn-secondary" data-edit-service="${esc(s.id)}">${t('common.edit')}</button>
+          <button type="button" class="btn btn-xs btn-danger" data-delete-service="${esc(s.id)}" data-service-name="${esc(serviceName(s))}">${t('common.delete')}</button>
         </td>
       </tr>`).join('');
       body.querySelectorAll('button[data-edit-service]').forEach((btn) => {
@@ -1322,7 +1340,7 @@ async function loadServices() {
     state.services = list;
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('services-error', err.message || 'Failed to load services.', loadServices);
+    showSectionError('services-error', err.message || t('svc.load_fail'), loadServices);
   } finally {
     setLoading('services-loading', false);
   }
@@ -1333,14 +1351,14 @@ function openServiceForm(id) {
   const form = $('service-form');
   form.reset();
   $('service-id').value = '';
-  $('service-modal-title').textContent = 'Add Service';
+  $('service-modal-title').textContent = t('svc.add');
   $('service-type').value = 'checkbox';
   $('service-default-qty').value = '1';
   $('service-is-available').checked = true;
   if (id) {
     const srv = (state.services || []).find((x) => String(x.id) === String(id));
     if (!srv) return;
-    $('service-modal-title').textContent = 'Edit Service';
+    $('service-modal-title').textContent = t('svc.edit_title');
     $('service-id').value = srv.id;
     const name = (srv.name && typeof srv.name === 'object') ? srv.name : { en: srv.nameEn || '', te: srv.nameTe || '', hi: srv.nameHi || '' };
     $('service-name-en').value = name.en || '';
@@ -1361,11 +1379,11 @@ async function saveService(event) {
   const nameEn = $('service-name-en').value.trim();
   const unitPrice = parseFloat($('service-price').value);
   if (!nameEn) {
-    showInlineError('service-form-error', 'Please enter an English service name.');
+    showInlineError('service-form-error', t('svc.err_name'));
     return;
   }
   if (!Number.isFinite(unitPrice) || unitPrice < 0) {
-    showInlineError('service-form-error', 'Please enter a valid unit price.');
+    showInlineError('service-form-error', t('svc.err_price'));
     return;
   }
   const type = $('service-type').value;
@@ -1379,35 +1397,35 @@ async function saveService(event) {
     isAvailable: $('service-is-available').checked,
   };
   const btn = $('service-save-btn');
-  setBusy(btn, true, 'Saving…');
+  setBusy(btn, true, t('busy.saving'));
   try {
     if (id) {
       await api('/api/admin/services/' + encodeURIComponent(id), { method: 'PUT', body: payload });
-      showToast('Service updated.');
+      showToast(t('svc.updated'));
     } else {
       await api('/api/admin/services', { method: 'POST', body: payload });
-      showToast('Service added.');
+      showToast(t('svc.added'));
     }
     closeModal('service-modal');
     loadServices();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showInlineError('service-form-error', err.message || 'Failed to save the service.');
+    showInlineError('service-form-error', err.message || t('svc.save_fail'));
   } finally {
     setBusy(btn, false);
   }
 }
 
 async function deleteService(id, name) {
-  const ok = await confirmDialog('Delete Service', `Delete the service "${name || id}"? This cannot be undone.`, 'Delete');
+  const ok = await confirmDialog(t('svc.delete_title'), t('svc.delete_msg', { name: name || id }), t('common.delete'));
   if (!ok) return;
   try {
     await api('/api/admin/services/' + encodeURIComponent(id), { method: 'DELETE' });
-    showToast('Service deleted.');
+    showToast(t('svc.deleted'));
     loadServices();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showToast(err.message || 'Failed to delete the service.', 'error');
+    showToast(err.message || t('svc.delete_fail'), 'error');
   }
 }
 
@@ -1436,7 +1454,7 @@ async function loadCustomers() {
         <td>${esc(num(c.bookingsCount ?? (c.bookings ? c.bookings.length : 0)))}</td>
         <td class="cell-nowrap">${esc(fmtDate(c.lastBookingDate))}</td>
         <td class="cell-actions">
-          <button type="button" class="btn btn-xs btn-secondary" data-customer-id="${esc(c.id)}">View</button>
+          <button type="button" class="btn btn-xs btn-secondary" data-customer-id="${esc(c.id)}">${t('common.view')}</button>
           ${c.phone ? `<a class="btn btn-xs btn-secondary" href="${esc(waLink(c.phone))}" target="_blank" rel="noopener"><i class="fa-brands fa-whatsapp"></i> WhatsApp</a>` : ''}
         </td>
       </tr>`).join('');
@@ -1446,7 +1464,7 @@ async function loadCustomers() {
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('customers-error', err.message || 'Failed to load customers.', loadCustomers);
+    showSectionError('customers-error', err.message || t('cust.load_fail'), loadCustomers);
   } finally {
     setLoading('customers-loading', false);
   }
@@ -1454,16 +1472,16 @@ async function loadCustomers() {
 
 async function openCustomerDetail(id) {
   const modalBody = $('customer-modal-body');
-  $('customer-modal-title').textContent = 'Customer';
-  modalBody.innerHTML = '<div class="loading-row"><span class="spinner"></span> Loading customer…</div>';
+  $('customer-modal-title').textContent = t('cust.title');
+  modalBody.innerHTML = '<div class="loading-row"><span class="spinner"></span> ' + esc(t('loading.customer')) + '</div>';
   openModal('customer-modal');
   try {
     const data = await api('/api/admin/customers/' + encodeURIComponent(id));
     const c = data.customer || data;
     const bookings = Array.isArray(data.bookings) ? data.bookings : (Array.isArray(c.bookings) ? c.bookings : []);
-    $('customer-modal-title').textContent = c.name || 'Customer';
+    $('customer-modal-title').textContent = c.name || t('cust.title');
     const historyRows = bookings.length === 0
-      ? '<tr><td colspan="5" class="cell-muted">No bookings yet.</td></tr>'
+      ? '<tr><td colspan="5" class="cell-muted">' + esc(t('cust.no_bookings')) + '</td></tr>'
       : bookings.map((b) => `<tr>
           <td class="cell-nowrap"><strong>${esc(b.quoteNumber || b.id)}</strong></td>
           <td>${esc(eventLabel(b))}</td>
@@ -1473,23 +1491,23 @@ async function openCustomerDetail(id) {
         </tr>`).join('');
     modalBody.innerHTML = `
       <div class="detail-grid">
-        <p><span class="detail-label">Name</span>${esc(c.name || '—')}</p>
-        <p><span class="detail-label">Phone</span>${esc(c.phone || '—')}</p>
-        ${c.email ? `<p><span class="detail-label">Email</span>${esc(c.email)}</p>` : ''}
-        <p><span class="detail-label">Total bookings</span>${esc(bookings.length)}</p>
+        <p><span class="detail-label">${t('cust.name')}</span>${esc(c.name || '—')}</p>
+        <p><span class="detail-label">${t('cust.phone')}</span>${esc(c.phone || '—')}</p>
+        ${c.email ? `<p><span class="detail-label">${t('cust.email')}</span>${esc(c.email)}</p>` : ''}
+        <p><span class="detail-label">${t('cust.total_bookings')}</span>${esc(bookings.length)}</p>
       </div>
       ${c.phone ? `<p><a class="btn btn-secondary btn-sm" href="${esc(waLink(c.phone))}" target="_blank" rel="noopener"><i class="fa-brands fa-whatsapp"></i> WhatsApp</a>
-      <a class="btn btn-secondary btn-sm" href="tel:${esc(String(c.phone).replace(/\D/g, ''))}"><i class="fa-solid fa-phone"></i> Call</a></p>` : ''}
-      <h4 class="detail-section-title">Booking History</h4>
+      <a class="btn btn-secondary btn-sm" href="tel:${esc(String(c.phone).replace(/\D/g, ''))}"><i class="fa-solid fa-phone"></i> ${t('cust.call')}</a></p>` : ''}
+      <h4 class="detail-section-title">${t('cust.history')}</h4>
       <div class="table-wrap">
         <table class="data-table" style="min-width:0">
-          <thead><tr><th>Quote No.</th><th>Event</th><th>Date</th><th>Total</th><th>Status</th></tr></thead>
+          <thead><tr><th>${t('th.quote_no')}</th><th>${t('th.event')}</th><th>${t('th.date')}</th><th>${t('th.total')}</th><th>${t('th.status')}</th></tr></thead>
           <tbody>${historyRows}</tbody>
         </table>
       </div>`;
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    modalBody.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to load this customer.')}</div>`;
+    modalBody.innerHTML = `<div class="alert alert-error">${esc(err.message || t('cust.load_fail_one'))}</div>`;
   }
 }
 
@@ -1516,16 +1534,16 @@ async function loadInquiries() {
         <div class="list-card-header">
           <div>
             <h4 class="list-card-title">${esc(q.name || '—')}</h4>
-            <p class="list-card-meta">${esc(q.phone || '')}${q.email ? ' · ' + esc(q.email) : ''} · ${esc(eventLabel(q))} · ${esc(fmtDate(q.eventDate))} · ${esc(num(q.guests))} guests</p>
+            <p class="list-card-meta">${esc(q.phone || '')}${q.email ? ' · ' + esc(q.email) : ''} · ${esc(eventLabel(q))} · ${esc(fmtDate(q.eventDate))} · ${esc(t('common.guests_count', { count: num(q.guests) }))}</p>
           </div>
           ${statusBadge(q.status)}
         </div>
         <p class="list-card-body">${esc(q.message || '')}</p>
         <div class="list-card-actions">
-          <button type="button" class="btn btn-sm btn-secondary" data-inquiry-id="${esc(q.id)}">View Details</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-inquiry-id="${esc(q.id)}">${t('inq.view_details')}</button>
           ${q.phone ? `<a class="btn btn-sm btn-secondary" href="${esc(waLink(q.phone))}" target="_blank" rel="noopener"><i class="fa-brands fa-whatsapp"></i> WhatsApp</a>
-          <a class="btn btn-sm btn-secondary" href="tel:${esc(String(q.phone).replace(/\D/g, ''))}"><i class="fa-solid fa-phone"></i> Call</a>` : ''}
-          ${q.email ? `<a class="btn btn-sm btn-secondary" href="mailto:${esc(q.email)}"><i class="fa-solid fa-envelope"></i> Email</a>` : ''}
+          <a class="btn btn-sm btn-secondary" href="tel:${esc(String(q.phone).replace(/\D/g, ''))}"><i class="fa-solid fa-phone"></i> ${t('cust.call')}</a>` : ''}
+          ${q.email ? `<a class="btn btn-sm btn-secondary" href="mailto:${esc(q.email)}"><i class="fa-solid fa-envelope"></i> ${t('inq.email_btn')}</a>` : ''}
         </div>
       </article>`).join('');
       container.querySelectorAll('button[data-inquiry-id]').forEach((btn) => {
@@ -1534,7 +1552,7 @@ async function loadInquiries() {
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('inquiries-error', err.message || 'Failed to load inquiries.', loadInquiries);
+    showSectionError('inquiries-error', err.message || t('inq.load_fail'), loadInquiries);
   } finally {
     setLoading('inquiries-loading', false);
   }
@@ -1543,8 +1561,8 @@ async function loadInquiries() {
 async function openInquiryDetail(id) {
   const modalBody = $('inquiry-modal-body');
   const footer = $('inquiry-modal-footer');
-  $('inquiry-modal-title').textContent = 'Inquiry';
-  modalBody.innerHTML = '<div class="loading-row"><span class="spinner"></span> Loading inquiry…</div>';
+  $('inquiry-modal-title').textContent = t('inq.title');
+  modalBody.innerHTML = '<div class="loading-row"><span class="spinner"></span> ' + esc(t('loading.inquiry')) + '</div>';
   footer.innerHTML = '';
   openModal('inquiry-modal');
   // The list response already carries the full inquiry; reuse it when present.
@@ -1563,42 +1581,42 @@ async function openInquiryDetail(id) {
     if (found) {
       renderInquiryDetail(found);
     } else {
-      modalBody.innerHTML = '<div class="alert alert-error">Inquiry not found.</div>';
+      modalBody.innerHTML = '<div class="alert alert-error">' + esc(t('inq.not_found')) + '</div>';
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    modalBody.innerHTML = `<div class="alert alert-error">${esc(err.message || 'Failed to load this inquiry.')}</div>`;
+    modalBody.innerHTML = `<div class="alert alert-error">${esc(err.message || t('inq.load_fail_one'))}</div>`;
   }
 }
 
 function renderInquiryDetail(q) {
   state.currentInquiry = q;
-  $('inquiry-modal-title').textContent = 'Inquiry — ' + (q.name || '—');
+  $('inquiry-modal-title').textContent = t('inq.detail_title', { name: q.name || '—' });
   const linkedQuote = q.quoteNumber || q.linkedQuoteNumber || q.bookingQuoteNumber || '';
   $('inquiry-modal-body').innerHTML = `
     <div id="inquiry-update-error" class="alert alert-error" hidden></div>
     <div class="detail-grid">
-      <p><span class="detail-label">Name</span>${esc(q.name || '—')}</p>
-      <p><span class="detail-label">Status</span>${statusBadge(q.status)}</p>
-      <p><span class="detail-label">Phone</span>${esc(q.phone || '—')}</p>
-      <p><span class="detail-label">Email</span>${esc(q.email || '—')}</p>
-      <p><span class="detail-label">Event</span>${esc(eventLabel(q))}</p>
-      <p><span class="detail-label">Event date</span>${esc(fmtDate(q.eventDate))}</p>
-      <p><span class="detail-label">Guests</span>${esc(num(q.guests))}</p>
-      <p><span class="detail-label">Received</span>${esc(fmtDateTime(q.createdAt))}</p>
-      ${linkedQuote ? `<p><span class="detail-label">Linked booking</span><strong>${esc(linkedQuote)}</strong></p>` : ''}
-      <p style="grid-column: 1 / -1;"><span class="detail-label">Message</span>${esc(q.message || '—')}</p>
+      <p><span class="detail-label">${t('inq.name')}</span>${esc(q.name || '—')}</p>
+      <p><span class="detail-label">${t('inq.status')}</span>${statusBadge(q.status)}</p>
+      <p><span class="detail-label">${t('inq.phone')}</span>${esc(q.phone || '—')}</p>
+      <p><span class="detail-label">${t('inq.email')}</span>${esc(q.email || '—')}</p>
+      <p><span class="detail-label">${t('inq.event')}</span>${esc(eventLabel(q))}</p>
+      <p><span class="detail-label">${t('inq.event_date')}</span>${esc(fmtDate(q.eventDate))}</p>
+      <p><span class="detail-label">${t('inq.guests')}</span>${esc(num(q.guests))}</p>
+      <p><span class="detail-label">${t('inq.received')}</span>${esc(fmtDateTime(q.createdAt))}</p>
+      ${linkedQuote ? `<p><span class="detail-label">${t('inq.linked')}</span><strong>${esc(linkedQuote)}</strong></p>` : ''}
+      <p style="grid-column: 1 / -1;"><span class="detail-label">${t('inq.message')}</span>${esc(q.message || '—')}</p>
     </div>`;
   const footer = $('inquiry-modal-footer');
   footer.innerHTML = '';
   if (q.phone) {
     footer.insertAdjacentHTML('beforeend',
       `<a class="btn btn-secondary" href="${esc(waLink(q.phone))}" target="_blank" rel="noopener"><i class="fa-brands fa-whatsapp"></i> WhatsApp</a>
-       <a class="btn btn-secondary" href="tel:${esc(String(q.phone).replace(/\D/g, ''))}"><i class="fa-solid fa-phone"></i> Call</a>`);
+       <a class="btn btn-secondary" href="tel:${esc(String(q.phone).replace(/\D/g, ''))}"><i class="fa-solid fa-phone"></i> ${t('cust.call')}</a>`);
   }
   if (q.email) {
     footer.insertAdjacentHTML('beforeend',
-      `<a class="btn btn-secondary" href="mailto:${esc(q.email)}"><i class="fa-solid fa-envelope"></i> Email</a>`);
+      `<a class="btn btn-secondary" href="mailto:${esc(q.email)}"><i class="fa-solid fa-envelope"></i> ${t('inq.email_btn')}</a>`);
   }
   footer.insertAdjacentHTML('beforeend', '<span class="modal-footer-spacer"></span>');
   const statuses = ['new', 'contacted', 'closed'];
@@ -1607,14 +1625,14 @@ function renderInquiryDetail(q) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn btn-primary';
-    btn.textContent = 'Mark ' + s;
+    btn.textContent = t('inq.mark_status', { status: statusLabel(s) });
     btn.addEventListener('click', () => updateInquiryStatus(q.id, s));
     footer.appendChild(btn);
   });
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.className = 'btn btn-secondary';
-  closeBtn.textContent = 'Close';
+  closeBtn.textContent = t('common.close');
   closeBtn.addEventListener('click', () => closeModal('inquiry-modal'));
   footer.appendChild(closeBtn);
 }
@@ -1626,13 +1644,13 @@ async function updateInquiryStatus(id, status) {
       method: 'PATCH',
       body: { status },
     });
-    showToast(`Inquiry marked ${status}.`);
+    showToast(t('inq.marked', { status: statusLabel(status) }));
     closeModal('inquiry-modal');
     loadInquiries();
     if (state.section === 'dashboard') loadDashboard();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showInlineError('inquiry-update-error', err.message || 'Failed to update the inquiry.');
+    showInlineError('inquiry-update-error', err.message || t('inq.update_fail'));
   }
 }
 
@@ -1644,7 +1662,7 @@ function starsHtml(rating) {
   for (let i = 1; i <= 5; i++) {
     out += `<i class="fa-${i <= r ? 'solid' : 'regular'} fa-star"></i>`;
   }
-  return `<span class="stars" aria-label="${r} out of 5 stars">${out}</span>`;
+  return `<span class="stars" aria-label="${esc(t('rev.stars', { count: r }))}">${out}</span>`;
 }
 
 async function loadReviews() {
@@ -1668,15 +1686,15 @@ async function loadReviews() {
           </div>
           <div style="text-align:right;">
             ${starsHtml(r.rating)}
-            <div style="margin-top:4px;">${r.isVerified ? '<span class="badge badge-verified">Verified</span> ' : ''}<span class="badge ${r.isVisible !== false ? 'badge-yes' : 'badge-no'}">${r.isVisible !== false ? 'Visible' : 'Hidden'}</span></div>
+            <div style="margin-top:4px;">${r.isVerified ? '<span class="badge badge-verified">' + esc(t('rev.verified')) + '</span> ' : ''}<span class="badge ${r.isVisible !== false ? 'badge-yes' : 'badge-no'}">${r.isVisible !== false ? t('rev.visible') : t('rev.hidden')}</span></div>
           </div>
         </div>
         <p class="list-card-body">${esc(r.comment || r.text || '')}</p>
-        ${r.ownerReply ? `<div class="owner-reply"><strong>Your reply:</strong> ${esc(r.ownerReply)}</div>` : ''}
+        ${r.ownerReply ? `<div class="owner-reply"><strong>${t('rev.your_reply')}</strong> ${esc(r.ownerReply)}</div>` : ''}
         <div class="list-card-actions">
-          <button type="button" class="btn btn-sm btn-secondary" data-toggle-review="${esc(r.id)}" data-visible="${r.isVisible !== false}">${r.isVisible !== false ? 'Hide' : 'Show'}</button>
-          <button type="button" class="btn btn-sm btn-secondary" data-reply-review="${esc(r.id)}">${r.ownerReply ? 'Edit Reply' : 'Reply'}</button>
-          <button type="button" class="btn btn-sm btn-danger" data-delete-review="${esc(r.id)}">Delete</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-toggle-review="${esc(r.id)}" data-visible="${r.isVisible !== false}">${r.isVisible !== false ? t('rev.hide') : t('rev.show')}</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-reply-review="${esc(r.id)}">${r.ownerReply ? t('rev.edit_reply') : t('rev.reply')}</button>
+          <button type="button" class="btn btn-sm btn-danger" data-delete-review="${esc(r.id)}">${t('common.delete')}</button>
         </div>
       </article>`).join('');
       container.querySelectorAll('button[data-toggle-review]').forEach((btn) => {
@@ -1691,7 +1709,7 @@ async function loadReviews() {
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('reviews-error', err.message || 'Failed to load reviews.', loadReviews);
+    showSectionError('reviews-error', err.message || t('rev.load_fail'), loadReviews);
   } finally {
     setLoading('reviews-loading', false);
   }
@@ -1703,11 +1721,11 @@ async function toggleReviewVisibility(id, makeVisible) {
       method: 'PATCH',
       body: { isVisible: makeVisible },
     });
-    showToast(makeVisible ? 'Review is now visible.' : 'Review hidden.');
+    showToast(makeVisible ? t('rev.visible_now') : t('rev.hidden_now'));
     loadReviews();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showToast(err.message || 'Failed to update the review.', 'error');
+    showToast(err.message || t('rev.update_fail'), 'error');
   }
 }
 
@@ -1727,33 +1745,33 @@ async function saveReviewReply(event) {
   const id = $('review-id').value;
   const ownerReply = $('review-reply-text').value.trim();
   const btn = $('review-save-btn');
-  setBusy(btn, true, 'Saving…');
+  setBusy(btn, true, t('busy.saving'));
   try {
     await api('/api/admin/reviews/' + encodeURIComponent(id), {
       method: 'PATCH',
       body: { ownerReply },
     });
-    showToast('Reply saved.');
+    showToast(t('rev.reply_saved'));
     closeModal('review-modal');
     loadReviews();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showInlineError('review-form-error', err.message || 'Failed to save the reply.');
+    showInlineError('review-form-error', err.message || t('rev.reply_fail'));
   } finally {
     setBusy(btn, false);
   }
 }
 
 async function deleteReview(id) {
-  const ok = await confirmDialog('Delete Review', 'Delete this review? This cannot be undone.', 'Delete');
+  const ok = await confirmDialog(t('rev.delete_title'), t('rev.delete_msg'), t('common.delete'));
   if (!ok) return;
   try {
     await api('/api/admin/reviews/' + encodeURIComponent(id), { method: 'DELETE' });
-    showToast('Review deleted.');
+    showToast(t('rev.deleted'));
     loadReviews();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showToast(err.message || 'Failed to delete the review.', 'error');
+    showToast(err.message || t('rev.delete_fail'), 'error');
   }
 }
 
@@ -1794,7 +1812,7 @@ async function loadSettings() {
     $('settings-form').hidden = false;
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('settings-error', err.message || 'Failed to load settings.', loadSettings);
+    showSectionError('settings-error', err.message || t('set.load_fail'), loadSettings);
   } finally {
     setLoading('settings-loading', false);
   }
@@ -1817,18 +1835,18 @@ async function saveSettings(event) {
   });
   if (Number.isNaN(payload.taxRate) || Number.isNaN(payload.serviceChargeRate) ||
       Number.isNaN(payload.defaultTransportPrice) || Number.isNaN(payload.minGuestsForBooking)) {
-    showInlineError('settings-error', 'Please enter valid numbers for the rates, transport price and minimum guests.');
+    showInlineError('settings-error', t('set.err_numbers'));
     return;
   }
   const btn = $('settings-save-btn');
-  setBusy(btn, true, 'Saving…');
+  setBusy(btn, true, t('busy.saving'));
   try {
     await api('/api/admin/settings', { method: 'PUT', body: payload });
-    showInlineError('settings-success', 'Settings saved successfully.');
-    showToast('Settings saved.');
+    showInlineError('settings-success', t('set.saved'));
+    showToast(t('set.saved_toast'));
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showInlineError('settings-error', err.message || 'Failed to save settings.');
+    showInlineError('settings-error', err.message || t('set.save_fail'));
   } finally {
     setBusy(btn, false);
   }
@@ -1849,11 +1867,11 @@ async function loadAdmins() {
       $('admins-empty').hidden = false;
     } else {
       body.innerHTML = list.map((a) => `<tr>
-        <td><strong>${esc(a.email)}</strong>${state.admin && String(a.id) === String(state.admin.id) ? ' <span class="badge badge-verified">You</span>' : ''}</td>
+        <td><strong>${esc(a.email)}</strong>${state.admin && String(a.id) === String(state.admin.id) ? ' <span class="badge badge-verified">' + esc(t('adm.you')) + '</span>' : ''}</td>
         <td>${esc(a.name || '—')}</td>
         <td>${esc(a.role || 'admin')}</td>
         <td class="cell-nowrap">${esc(fmtDate(a.createdAt))}</td>
-        <td class="cell-actions"><button type="button" class="btn btn-xs btn-danger" data-delete-admin="${esc(a.id)}" data-admin-email="${esc(a.email)}">Delete</button></td>
+        <td class="cell-actions"><button type="button" class="btn btn-xs btn-danger" data-delete-admin="${esc(a.id)}" data-admin-email="${esc(a.email)}">${t('common.delete')}</button></td>
       </tr>`).join('');
       body.querySelectorAll('button[data-delete-admin]').forEach((btn) => {
         btn.addEventListener('click', () => deleteAdmin(btn.dataset.deleteAdmin, btn.dataset.adminEmail));
@@ -1861,7 +1879,7 @@ async function loadAdmins() {
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('admins-error', err.message || 'Failed to load admins.', loadAdmins);
+    showSectionError('admins-error', err.message || t('adm.load_fail'), loadAdmins);
   } finally {
     setLoading('admins-loading', false);
   }
@@ -1874,39 +1892,39 @@ async function addAdmin(event) {
   const name = $('admin-add-name').value.trim();
   const password = $('admin-add-password').value;
   if (!email) {
-    showInlineError('admins-error', 'Please enter an email address.');
+    showInlineError('admins-error', t('adm.err_email'));
     return;
   }
   if (password.length < 8) {
-    showInlineError('admins-error', 'The password must be at least 8 characters long.');
+    showInlineError('admins-error', t('adm.err_pw'));
     return;
   }
   const btn = $('admin-add-submit');
-  setBusy(btn, true, 'Adding…');
+  setBusy(btn, true, t('busy.adding'));
   try {
     await api('/api/admin/admins', { method: 'POST', body: { email, password, name } });
-    showToast('Admin added.');
+    showToast(t('adm.added'));
     $('admin-add-form').reset();
     loadAdmins();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showInlineError('admins-error', err.message || 'Failed to add the admin.');
+    showInlineError('admins-error', err.message || t('adm.add_fail'));
   } finally {
     setBusy(btn, false);
   }
 }
 
 async function deleteAdmin(id, email) {
-  const ok = await confirmDialog('Delete Admin', `Delete the admin account "${email || id}"? This cannot be undone.`, 'Delete');
+  const ok = await confirmDialog(t('adm.delete_title'), t('adm.delete_msg', { email: email || id }), t('common.delete'));
   if (!ok) return;
   try {
     await api('/api/admin/admins/' + encodeURIComponent(id), { method: 'DELETE' });
-    showToast('Admin deleted.');
+    showToast(t('adm.deleted'));
     loadAdmins();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
     // Server forbids deleting the last admin or yourself — show its message.
-    showToast(err.message || 'Failed to delete the admin.', 'error');
+    showToast(err.message || t('adm.delete_fail'), 'error');
   }
 }
 
@@ -1939,7 +1957,7 @@ async function loadOutbox() {
           <td class="cell-muted">${esc(o.error || '—')}</td>
           <td class="cell-nowrap">${esc(fmtDateTime(o.createdAt))}</td>
           <td class="cell-nowrap">${esc(fmtDateTime(o.sentAt))}</td>
-          <td class="cell-actions">${canResend ? `<button type="button" class="btn btn-xs btn-secondary" data-resend-outbox="${esc(o.id)}">Resend</button>` : ''}</td>
+          <td class="cell-actions">${canResend ? `<button type="button" class="btn btn-xs btn-secondary" data-resend-outbox="${esc(o.id)}">${t('out.resend')}</button>` : ''}</td>
         </tr>`;
       }).join('');
       body.querySelectorAll('button[data-resend-outbox]').forEach((btn) => {
@@ -1948,7 +1966,7 @@ async function loadOutbox() {
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('outbox-error', err.message || 'Failed to load the outbox.', loadOutbox);
+    showSectionError('outbox-error', err.message || t('out.load_fail'), loadOutbox);
   } finally {
     setLoading('outbox-loading', false);
   }
@@ -1962,16 +1980,16 @@ async function resendOutbox(id, btn) {
     // (e.g. "SMTP is not configured") instead of claiming success.
     const result = (data && data.result) || {};
     if (result.status === 'sent') {
-      showToast('Notification sent.');
+      showToast(t('out.sent'));
     } else if (result.error) {
-      showToast('Resend failed: ' + result.error, 'error');
+      showToast(t('out.resend_fail', { error: result.error }), 'error');
     } else {
-      showToast('Notification could not be sent yet.', 'error');
+      showToast(t('out.could_not_send'), 'error');
     }
     loadOutbox();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showToast(err.message || 'Failed to resend the notification.', 'error');
+    showToast(err.message || t('out.resend_fail_generic'), 'error');
     if (btn) btn.disabled = false;
   }
 }
@@ -1999,7 +2017,7 @@ async function loadAudit() {
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    showSectionError('audit-error', err.message || 'Failed to load the audit log.', loadAudit);
+    showSectionError('audit-error', err.message || t('audit.load_fail'), loadAudit);
   } finally {
     setLoading('audit-loading', false);
   }
@@ -2008,6 +2026,29 @@ async function loadAudit() {
 /* ============================== Init / wiring ============================== */
 
 function init() {
+  // Language: apply the stored choice (shared with the customer site) to
+  // the static shell first, so the login screen renders in it. Both
+  // language <select> controls (auth view + topbar) switch it.
+  applyAdminLanguage();
+  document.querySelectorAll('.lang-select').forEach((sel) => {
+    sel.addEventListener('change', () => setAdminLanguage(sel.value));
+  });
+  // Re-render dynamic content when the language changes: the current
+  // section's tables, badges and labels reload, and the change-password
+  // note (set by JS, not data-i18n) is re-translated when that form is open.
+  window.onAdminLanguageChange = () => {
+    if (!$('portal-view').hidden) {
+      showSection(state.section, { updateHash: false });
+      return;
+    }
+    if (!$('change-password-form').hidden) {
+      const voluntary = !$('change-password-back').hidden;
+      $('change-password-note').textContent = t(voluntary
+        ? 'auth.change_pw_note_voluntary'
+        : 'auth.change_pw_note_forced');
+    }
+  };
+
   // Item thumbnails are remote URLs: if one fails to load, hide it instead
   // of showing a broken-image icon.
   document.addEventListener('error', (e) => {
@@ -2027,7 +2068,7 @@ function init() {
     if (!input) return;
     const showing = input.type === 'text';
     input.type = showing ? 'password' : 'text';
-    btn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+    btn.setAttribute('aria-label', showing ? t('auth.show_password') : t('auth.hide_password'));
     const icon = btn.querySelector('i');
     if (icon) icon.className = showing ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash';
     input.focus();
@@ -2129,7 +2170,7 @@ function init() {
     if (url && !state.itemImageFile) {
       $('item-image-preview').src = url;
       $('item-image-preview').hidden = false;
-      $('item-image-status').textContent = 'Image URL set';
+      $('item-image-status').textContent = t('items.image_url_set');
     }
   });
 

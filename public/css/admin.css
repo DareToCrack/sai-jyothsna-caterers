@@ -672,6 +672,39 @@ select.form-input { appearance: auto; }
   .topbar-user span { display: none; }
 }
 
+/* Language switcher (English / తెలుగు) — topbar + auth card. */
+.lang-select {
+  padding: 7px 8px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+}
+.lang-select:focus {
+  border-color: var(--secondary);
+  box-shadow: 0 0 0 3px rgba(197, 160, 89, 0.18);
+}
+.topbar-lang { max-width: 130px; }
+.auth-lang {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.auth-lang-label {
+  color: var(--secondary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 /* Show/hide password (eye icon) inside password fields. */
 .password-field { position: relative; display: block; }
 .password-field .form-input { padding-right: 42px; }
