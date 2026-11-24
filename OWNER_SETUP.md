@@ -286,6 +286,14 @@ Everything is done in the admin portal — no code, no developer needed.
 already issued to customers never change — the price at booking time is
 locked in.
 
+**Languages:** the website and the admin portal both work in **English,
+हिन्दी and తెలుగు**. Customers pick their language from the buttons at
+the top of the website; in the admin portal there is a language picker
+on the login screen and at the top of every page. The choice is shared,
+so if you pick Telugu in the admin portal the website switches to
+Telugu too. Dish and category names are shown in all three languages —
+when you add a dish, fill in its name in English, Hindi and Telugu.
+
 ---
 
 ## Step 8 — What stays free, and what it actually costs

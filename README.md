@@ -333,6 +333,14 @@ Admin login also has a working **forgot-password flow**: the emailed reset
 link opens a reset form in the portal (single-use token, 1-hour expiry),
 and the new password works immediately after.
 
+The whole admin portal works in **English, हिन्दी and తెలుగు** too — a
+language picker sits on the login card and in the top bar (410 keys in
+each language, full parity). The language choice is shared with the
+customer site (same `localStorage` key, `sjc_lang`), so picking Telugu
+on one switches the other as well; English is the default and the
+fallback for any missing phrase. Dish and category names are stored in
+EN/TE/HI in the database and are managed from the Menu Items screen.
+
 ## Seed data
 
 Migrated exactly from the original project's `database.js` (ids preserved),
