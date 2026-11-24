@@ -951,6 +951,25 @@ body.dark-mode .link-btn { color: var(--accent); }
 .text-link { display: block; width: 100%; text-align: center; margin-top: 14px; font-size: 13px; color: var(--text-muted); cursor: pointer; background: none; border: none; }
 
 /* "OR" divider between login methods (Google / OTP). */
+/* Show/hide password (eye icon) inside password fields. */
+.password-field { position: relative; display: block; }
+.password-field .form-input { padding-right: 42px; }
+.password-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 8px;
+  font-size: 15px;
+  line-height: 1;
+}
+.password-toggle:hover { color: var(--primary); }
+.password-toggle:focus-visible { outline: 2px solid var(--primary); border-radius: 4px; }
+
 .auth-divider {
   display: flex; align-items: center; gap: 12px;
   margin: 18px 0; color: var(--text-muted); font-size: 12px; font-weight: 600;

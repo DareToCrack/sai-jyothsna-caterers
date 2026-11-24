@@ -28,8 +28,15 @@
         <label class="form-label" for="login-email">Email</label>
         <input type="email" id="login-email" class="form-input" autocomplete="email" placeholder="admin@example.com" required>
         <label class="form-label" for="login-password">Password</label>
-        <input type="password" id="login-password" class="form-input" autocomplete="current-password" placeholder="••••••••" required>
+        <span class="password-field">
+          <input type="password" id="login-password" class="form-input" autocomplete="current-password" placeholder="••••••••" required>
+          <button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+        </span>
         <button type="submit" id="login-submit" class="btn btn-primary btn-block">Sign In</button>
+        <div id="admin-google-wrap" hidden>
+          <div class="auth-divider">or</div>
+          <a href="/api/admin/auth/google" class="btn btn-google btn-block"><i class="fa-brands fa-google"></i> Continue with Google</a>
+        </div>
         <button type="button" id="forgot-password-link" class="link-btn">Forgot password?</button>
       </form>
 
@@ -49,13 +56,38 @@
         <div id="change-password-error" class="alert alert-error" hidden></div>
         <p class="auth-note" id="change-password-note">You must change your password before continuing.</p>
         <label class="form-label" for="change-old-password">Current password</label>
-        <input type="password" id="change-old-password" class="form-input" autocomplete="current-password" placeholder="Current password" required>
+        <span class="password-field">
+          <input type="password" id="change-old-password" class="form-input" autocomplete="current-password" placeholder="Current password" required>
+          <button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+        </span>
         <label class="form-label" for="change-new-password">New password (min. 8 characters)</label>
-        <input type="password" id="change-new-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="New password (min. 8 characters)" required>
+        <span class="password-field">
+          <input type="password" id="change-new-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="New password (min. 8 characters)" required>
+          <button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+        </span>
         <label class="form-label" for="change-confirm-password">Confirm new password</label>
-        <input type="password" id="change-confirm-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="Repeat the new password" required>
+        <span class="password-field">
+          <input type="password" id="change-confirm-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="Repeat the new password" required>
+          <button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+        </span>
         <button type="submit" id="change-password-submit" class="btn btn-primary btn-block">Change Password &amp; Continue</button>
         <button type="button" id="change-password-back" class="btn btn-secondary btn-block" style="margin-top:8px;" hidden>Back to Dashboard</button>
+      </form>
+
+      <!-- Change email form (opened from the sidebar; admin must confirm
+           with the current password) -->
+      <form id="change-email-form" class="auth-form" hidden novalidate>
+        <div id="change-email-error" class="alert alert-error" hidden></div>
+        <p class="auth-note">Change the email address you sign in with. You will use the new email for your next login — and for Google Sign-In, the Google account of the new email.</p>
+        <label class="form-label" for="change-new-email">New email</label>
+        <input type="email" id="change-new-email" class="form-input" autocomplete="email" placeholder="you@example.com" required>
+        <label class="form-label" for="change-email-password">Current password</label>
+        <span class="password-field">
+          <input type="password" id="change-email-password" class="form-input" autocomplete="current-password" placeholder="Current password" required>
+          <button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+        </span>
+        <button type="submit" id="change-email-submit" class="btn btn-primary btn-block">Change Email</button>
+        <button type="button" id="change-email-back" class="btn btn-secondary btn-block" style="margin-top:8px;">Back to Dashboard</button>
       </form>
 
       <!-- Password reset form (opened from the link emailed by "Forgot password?") -->
@@ -64,9 +96,15 @@
         <div id="reset-password-info" class="alert alert-info" hidden></div>
         <p class="auth-note">Choose a new password for your admin account. The reset link is valid for one hour and can only be used once.</p>
         <label class="form-label" for="reset-new-password">New password (min. 8 characters)</label>
-        <input type="password" id="reset-new-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="New password (min. 8 characters)" required>
+        <span class="password-field">
+          <input type="password" id="reset-new-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="New password (min. 8 characters)" required>
+          <button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+        </span>
         <label class="form-label" for="reset-confirm-password">Confirm new password</label>
-        <input type="password" id="reset-confirm-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="Repeat the new password" required>
+        <span class="password-field">
+          <input type="password" id="reset-confirm-password" class="form-input" autocomplete="new-password" minlength="8" placeholder="Repeat the new password" required>
+          <button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+        </span>
         <button type="submit" id="reset-password-submit" class="btn btn-primary btn-block">Reset Password &amp; Sign In</button>
         <button type="button" id="reset-back-link" class="link-btn">Back to sign in</button>
       </form>
@@ -102,6 +140,7 @@
       <div class="sidebar-footer">
         <a class="nav-item nav-link" href="/" target="_blank" rel="noopener"><i class="fa-solid fa-globe"></i><span>View Website</span></a>
         <button class="nav-item nav-link" id="change-password-btn"><i class="fa-solid fa-key"></i><span>Change Password</span></button>
+        <button class="nav-item nav-link" id="change-email-btn"><i class="fa-solid fa-envelope"></i><span>Change Email</span></button>
         <button class="nav-item nav-logout" id="logout-btn"><i class="fa-solid fa-right-from-bracket"></i><span>Logout</span></button>
       </div>
     </aside>

@@ -235,7 +235,19 @@ You can do this right now, before the other steps.
    click **Change Password** in the left menu, enter the temporary
    password, then your new password twice. Pick a strong one (at least
    8 characters, with a mix of letters and numbers) and keep it safe —
-   this is the master key to your business website.
+   this is the master key to your business website. (Every password
+   box has a small eye icon on the right — tap it to see what you
+   typed.)
+4. **Signing in with Google:** once your admin email is your real
+   email address (your developer sets this up for you), you can also
+   sign in by clicking **Continue with Google** on the admin login
+   page and choosing your Google account — no password needed. Only
+   the Google account whose email matches your admin email can sign
+   in this way.
+5. **Changing your email:** if your email address ever changes, use
+   **Change Email** in the left menu (you will need your current
+   password to confirm). After that, sign in with the new email —
+   and with Google, use the Google account of the new email.
 4. If you ever forget the password, use the **"Forgot password?"** link
    on the login page (it emails a reset link — needs Step 2 to be set
    up), or ask your developer to reset it.

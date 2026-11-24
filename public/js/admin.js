@@ -268,7 +268,7 @@ function setBusy(button, busy, busyLabel) {
 /* ============================== Auth / views ============================== */
 
 function showAuthForm(formId) {
-  ['login-form', 'forgot-form', 'change-password-form', 'reset-password-form'].forEach((id) => {
+  ['login-form', 'forgot-form', 'change-password-form', 'change-email-form', 'reset-password-form'].forEach((id) => {
     $(id).hidden = id !== formId;
   });
 }
@@ -305,6 +305,45 @@ function showChangePassword(voluntary = false) {
   $('change-old-password').focus();
 }
 
+// Change-email is only ever opened voluntarily from the sidebar, so it
+// always has a Back button.
+function showChangeEmail() {
+  $('portal-view').hidden = true;
+  $('auth-view').hidden = false;
+  showAuthForm('change-email-form');
+  hideAlert('change-email-error');
+  $('change-new-email').value = state.admin ? state.admin.email : '';
+  $('change-email-password').value = '';
+  $('change-new-email').focus();
+  $('change-new-email').select();
+}
+
+async function handleChangeEmail(event) {
+  event.preventDefault();
+  hideAlert('change-email-error');
+  const newEmail = $('change-new-email').value.trim();
+  const password = $('change-email-password').value;
+  if (!newEmail || !password) {
+    showInlineError('change-email-error', 'Please enter the new email and your current password.');
+    return;
+  }
+  const btn = $('change-email-submit');
+  setBusy(btn, true, 'Changing…');
+  try {
+    const data = await api('/api/admin/auth/change-email', {
+      method: 'POST',
+      body: { newEmail, password }
+    });
+    state.admin = data.admin;
+    toast('Email changed. Use the new email to sign in from now on.', 'success');
+    showPortal();
+  } catch (err) {
+    showInlineError('change-email-error', err.userMessage || 'Could not change the email.');
+  } finally {
+    setBusy(btn, false);
+  }
+}
+
 function showPortal() {
   $('auth-view').hidden = true;
   $('portal-view').hidden = false;
@@ -317,7 +356,7 @@ function showPortal() {
 }
 
 /** First load: check the session; portal if logged in, login screen otherwise. */
-async function checkSession() {
+async function checkSession(loginMessage) {
   try {
     const data = await api('/api/admin/auth/me', { noAuthRedirect: true });
     state.admin = data.admin;
@@ -328,12 +367,38 @@ async function checkSession() {
     }
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
-      showLogin();
+      showLogin(loginMessage);
     } else {
       // Server unreachable: still show login with a hint.
       showLogin('Could not reach the server. Please try again.');
     }
   }
+}
+
+// Google Sign-In on the admin login page: show the button only when the
+// server has Google configured, and show a clear message when the OAuth
+// callback redirected back with ?google=... (e.g. a Google account that
+// is not an admin account). The query param is removed from the URL so a
+// refresh does not repeat the message.
+function initAdminGoogleLogin() {
+  fetch('/api/auth/methods')
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (data && data.google) $('admin-google-wrap').hidden = false;
+    })
+    .catch(() => { /* Google button stays hidden */ });
+
+  const params = new URLSearchParams(location.search);
+  const reason = params.get('google');
+  if (!reason) return null;
+  history.replaceState(null, '', location.pathname + location.hash);
+  const messages = {
+    'not-admin': 'This Google account does not have admin access. Sign in with the Google account that matches your admin email, or use your email and password.',
+    locked: 'This admin account is locked for 15 minutes after too many wrong password attempts. Please try again later.',
+    denied: 'Google sign-in was cancelled.',
+    error: 'Google sign-in failed. Please try again, or sign in with your email and password.'
+  };
+  return messages[reason] || messages.error;
 }
 
 async function handleLogin(event) {
@@ -1952,10 +2017,27 @@ function init() {
     }
   }, true);
 
+  // Show/hide password (eye icon) on every password field: one delegated
+  // handler covers all .password-toggle buttons, present and future.
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.password-toggle');
+    if (!btn) return;
+    const field = btn.closest('.password-field');
+    const input = field && field.querySelector('input');
+    if (!input) return;
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    btn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+    const icon = btn.querySelector('i');
+    if (icon) icon.className = showing ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash';
+    input.focus();
+  });
+
   // Auth forms
   $('login-form').addEventListener('submit', handleLogin);
   $('forgot-form').addEventListener('submit', handleForgotPassword);
   $('change-password-form').addEventListener('submit', handleChangePassword);
+  $('change-email-form').addEventListener('submit', handleChangeEmail);
   $('reset-password-form').addEventListener('submit', handleResetPassword);
   $('forgot-password-link').addEventListener('click', () => {
     hideAlert('forgot-error');
@@ -1971,6 +2053,8 @@ function init() {
   $('logout-btn').addEventListener('click', handleLogout);
   $('change-password-btn').addEventListener('click', () => showChangePassword(true));
   $('change-password-back').addEventListener('click', showPortal);
+  $('change-email-btn').addEventListener('click', showChangeEmail);
+  $('change-email-back').addEventListener('click', showPortal);
 
   // Vercel demo-deployment notice (admin dashboard only): dismissible for
   // the rest of the browser session.
@@ -2083,8 +2167,10 @@ function init() {
   if (resetMatch) {
     showResetPassword(decodeURIComponent(resetMatch[1]));
   } else {
+    // Google Sign-In button + any ?google=... message from the callback.
+    const googleMessage = initAdminGoogleLogin();
     // Session check on first load
-    checkSession();
+    checkSession(googleMessage);
   }
 }
 

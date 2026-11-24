@@ -81,7 +81,13 @@ ADMIN_EMAIL=owner@example.com ADMIN_PASSWORD='NewPass123' npm run reset-admin
 
 The seeded admin **must change this password on first login** — the portal
 forces the change before showing the dashboard. An admin can change their
-password at any time from the portal sidebar (Change Password).
+password at any time from the portal sidebar (Change Password) and their
+email address from the sidebar too (Change Email — needs the current
+password to confirm). Admins can also sign in with Google
+("Continue with Google" on the login page): the Google account's email
+must match an existing admin's email, and Google login never creates an
+admin account. Every password field has an eye icon to show/hide what
+you typed.
 
 **Brute-force protection:** 5 wrong passwords lock an admin account for 15
 minutes (the counter and lock live in the database, so they work across

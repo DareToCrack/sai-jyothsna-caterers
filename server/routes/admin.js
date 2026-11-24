@@ -15,6 +15,15 @@ const { getAllSettings, setSetting, nowIso } = require('../db');
 const lib = require('../lib');
 const notify = require('../notify');
 const uploads = require('../uploads');
+// Admin Google login reuses the customer OAuth client, redirect URI, and
+// callback (see routes/auth.js) — only the state cookie differs, so the
+// callback can tell an admin login apart from a customer login.
+const {
+  OAUTH_ADMIN_STATE_COOKIE,
+  OAUTH_STATE_MAX_AGE_MS,
+  googleRedirectUri,
+  GOOGLE_AUTH_URL
+} = require('./auth');
 
 const { ok, fail, asyncHandler, badRequest, notFound, forbidden } = lib;
 
@@ -130,6 +139,33 @@ function adminRoutes(ctx) {
     return ok(res, { admin: lib.mapAdmin(req.admin) });
   });
 
+  // GET /api/admin/auth/google — start admin Google Sign-In. Redirects
+  // to Google with the SAME redirect URI as customer login; the shared
+  // callback (/api/auth/google/callback) detects the admin state cookie
+  // and signs the admin in ONLY if the Google-verified email matches an
+  // existing admin account — it never creates an admin account.
+  router.get('/auth/google', (req, res) => {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return fail(res, 400, 'GOOGLE_NOT_CONFIGURED', 'Google login is not configured for this site');
+    }
+    const state = crypto.randomBytes(32).toString('hex');
+    res.cookie(OAUTH_ADMIN_STATE_COOKIE, state, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/api/auth/google',
+      maxAge: OAUTH_STATE_MAX_AGE_MS
+    });
+    const params = new URLSearchParams({
+      client_id: process.env.GOOGLE_CLIENT_ID,
+      redirect_uri: googleRedirectUri(req),
+      response_type: 'code',
+      scope: 'openid email profile',
+      state
+    });
+    return res.redirect(`${GOOGLE_AUTH_URL}?${params.toString()}`);
+  });
+
   router.post('/auth/change-password', lib.requireAdmin, asyncHandler(async (req, res) => {
     const body = req.body || {};
     const oldPassword = lib.reqString(body, 'oldPassword', { max: 200 });
@@ -144,6 +180,36 @@ function adminRoutes(ctx) {
     ).run(passwordHash, req.admin.id);
     await lib.auditLog(db, req.admin.id, 'admin.change-password', { email: req.admin.email });
     return ok(res, { message: 'Password changed' });
+  }));
+
+  // POST /api/admin/auth/change-email — change the signed-in admin's own
+  // email address. Requires the current password, so a briefly
+  // unattended logged-in session cannot hand the account to another
+  // email. The new email must be unique across admins. Note: admin
+  // Google login matches on email, so after changing the email the admin
+  // signs in with Google using the NEW email's Google account.
+  router.post('/auth/change-email', lib.requireAdmin, asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const newEmail = lib.reqString(body, 'newEmail', { max: 254 }).toLowerCase();
+    if (!lib.isValidEmail(newEmail)) {
+      badRequest('newEmail must be a valid email address');
+    }
+    const password = lib.reqString(body, 'password', { max: 200 });
+    const matches = await bcrypt.compare(password, req.admin.password_hash);
+    if (!matches) {
+      return fail(res, 401, 'INVALID_CREDENTIALS', 'Current password is incorrect');
+    }
+    if (newEmail === req.admin.email) {
+      return fail(res, 400, 'VALIDATION_ERROR', 'This is already your email address');
+    }
+    const taken = await db.prepare('SELECT id FROM admin_users WHERE email = ?').get(newEmail);
+    if (taken) {
+      return fail(res, 409, 'EMAIL_EXISTS', 'Another admin already uses this email address');
+    }
+    await db.prepare('UPDATE admin_users SET email = ? WHERE id = ?').run(newEmail, req.admin.id);
+    await lib.auditLog(db, req.admin.id, 'admin.change-email', { from: req.admin.email, to: newEmail });
+    const row = await db.prepare('SELECT * FROM admin_users WHERE id = ?').get(req.admin.id);
+    return ok(res, { admin: lib.mapAdmin(row) });
   }));
 
   // POST /api/admin/auth/forgot-password — always returns the same generic

@@ -346,6 +346,21 @@ class ApplicationController {
     // One delegated click handler for every [data-action] in the app
     // (header, footer, drawer, modals and all dynamically rendered views).
     document.addEventListener('click', (e) => {
+      // Show/hide password (eye icon) on every password field.
+      const toggle = e.target.closest('.password-toggle');
+      if (toggle) {
+        const field = toggle.closest('.password-field');
+        const input = field && field.querySelector('input');
+        if (input) {
+          const showing = input.type === 'text';
+          input.type = showing ? 'password' : 'text';
+          toggle.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+          const icon = toggle.querySelector('i');
+          if (icon) icon.className = showing ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash';
+          input.focus();
+        }
+        return;
+      }
       const el = e.target.closest('[data-action]');
       if (!el) return;
       const action = el.dataset.action;
@@ -2467,7 +2482,8 @@ class ApplicationController {
               '<input type="email" id="login-email" class="form-input" placeholder="' + esc(this.t('email_placeholder')) + '" autocomplete="email" maxlength="254" required>' +
               '<div class="error-msg" id="login-email-error">' + esc(this.t('err_email')) + '</div></div>' +
             '<div class="form-group"><label class="form-label" for="login-password">' + esc(this.t('password_label')) + '</label>' +
-              '<input type="password" id="login-password" class="form-input" placeholder="' + esc(this.t('password_placeholder')) + '" autocomplete="current-password" maxlength="200" required>' +
+              '<span class="password-field"><input type="password" id="login-password" class="form-input" placeholder="' + esc(this.t('password_placeholder')) + '" autocomplete="current-password" maxlength="200" required>' +
+              '<button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button></span>' +
               '<div class="error-msg" id="login-password-error">' + esc(this.t('err_password_required')) + '</div></div>' +
             '<button type="button" class="btn btn-primary btn-block" id="btn-login-password"><i class="fa-solid fa-right-to-bracket"></i> ' + esc(this.t('login_btn')) + '</button>' +
             (methods.passwordReset
@@ -2795,11 +2811,13 @@ class ApplicationController {
             '<input type="email" id="signup-email" class="form-input" placeholder="' + esc(this.t('email_placeholder')) + '" autocomplete="email" maxlength="254" required>' +
             '<div class="error-msg" id="signup-email-error">' + esc(this.t('err_email')) + '</div></div>' +
           '<div class="form-group"><label class="form-label" for="signup-password">' + esc(this.t('password_label')) + '</label>' +
-            '<input type="password" id="signup-password" class="form-input" placeholder="' + esc(this.t('password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+            '<span class="password-field"><input type="password" id="signup-password" class="form-input" placeholder="' + esc(this.t('password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+            '<button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button></span>' +
             '<div class="form-hint">' + esc(this.t('password_hint')) + '</div>' +
             '<div class="error-msg" id="signup-password-error">' + esc(this.t('err_password')) + '</div></div>' +
           '<div class="form-group"><label class="form-label" for="signup-confirm">' + esc(this.t('confirm_password_label')) + '</label>' +
-            '<input type="password" id="signup-confirm" class="form-input" placeholder="' + esc(this.t('confirm_password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+            '<span class="password-field"><input type="password" id="signup-confirm" class="form-input" placeholder="' + esc(this.t('confirm_password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+            '<button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button></span>' +
             '<div class="error-msg" id="signup-confirm-error">' + esc(this.t('err_password_match')) + '</div></div>' +
           '<button type="button" class="btn btn-primary btn-block" id="btn-signup"><i class="fa-solid fa-user-plus"></i> ' + esc(this.t('signup_btn')) + '</button>' +
           '<div class="auth-links"><a href="#/login" class="text-link-inline">' + esc(this.t('have_account_link')) + '</a></div>' +
@@ -2886,11 +2904,13 @@ class ApplicationController {
           '<div class="form-success" id="reset-success"></div>' +
           '<div id="reset-form-wrap">' +
             '<div class="form-group"><label class="form-label" for="reset-password">' + esc(this.t('new_password_label')) + '</label>' +
-              '<input type="password" id="reset-password" class="form-input" placeholder="' + esc(this.t('new_password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+              '<span class="password-field"><input type="password" id="reset-password" class="form-input" placeholder="' + esc(this.t('new_password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+              '<button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button></span>' +
               '<div class="form-hint">' + esc(this.t('password_hint')) + '</div>' +
               '<div class="error-msg" id="reset-password-error">' + esc(this.t('err_password')) + '</div></div>' +
             '<div class="form-group"><label class="form-label" for="reset-confirm">' + esc(this.t('confirm_password_label')) + '</label>' +
-              '<input type="password" id="reset-confirm" class="form-input" placeholder="' + esc(this.t('confirm_password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+              '<span class="password-field"><input type="password" id="reset-confirm" class="form-input" placeholder="' + esc(this.t('confirm_password_placeholder')) + '" autocomplete="new-password" maxlength="200" required>' +
+              '<button type="button" class="password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button></span>' +
               '<div class="error-msg" id="reset-confirm-error">' + esc(this.t('err_password_match')) + '</div></div>' +
             '<button type="button" class="btn btn-primary btn-block" id="btn-reset-password"><i class="fa-solid fa-key"></i> ' + esc(this.t('reset_btn')) + '</button>' +
           '</div>' +

@@ -59,6 +59,12 @@ const BCRYPT_COST = 12;
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 const OAUTH_STATE_COOKIE = 'sjc_oauth_state';
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
+// Admin Google login reuses this same OAuth client and callback (one
+// redirect URI registered with Google). The admin start endpoint
+// (GET /api/admin/auth/google, in routes/admin.js) sets this separate
+// state cookie; the callback branches on which cookie matches. Exported
+// for the admin routes — keep the value in sync.
+const OAUTH_ADMIN_STATE_COOKIE = 'sjc_oauth_admin';
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
@@ -183,16 +189,36 @@ function authRoutes(ctx) {
   // clear message. Success redirects to #/login, where the app's session
   // check sees the new session and sends the user on to their return-to
   // page (or home).
+  //
+  // The SAME callback serves admin Google login: when the state matches
+  // the admin state cookie (set by GET /api/admin/auth/google), the
+  // Google-verified email must match an EXISTING admin account — admins
+  // are never auto-created (anyone with a Google account could otherwise
+  // become an admin). A non-admin Google account redirects to
+  // /admin.html?google=not-admin; a locked admin account to
+  // /admin.html?google=locked; success to /admin.html with an admin
+  // session. Admin failures use the admin login page, customer failures
+  // the customer login view.
   router.get('/google/callback', asyncHandler(async (req, res) => {
-    const failRedirect = (reason) => res.redirect(`/#/login?google=${reason}`);
     const { code, state, error } = req.query;
+    const cookies = req.cookies || {};
+    const adminState = cookies[OAUTH_ADMIN_STATE_COOKIE];
+    const customerState = cookies[OAUTH_STATE_COOKIE];
+    // The state is single-use: clear both cookies whatever happens next.
+    res.clearCookie(OAUTH_STATE_COOKIE, { path: '/api/auth/google' });
+    res.clearCookie(OAUTH_ADMIN_STATE_COOKIE, { path: '/api/auth/google' });
+    // The flow is admin when the admin state cookie exists — even if the
+    // returned state is tampered (a failed admin login must return to the
+    // admin page, not the customer login view).
+    const adminFlow = !!adminState;
+    const isAdmin = !!(state && adminState && state === adminState);
+    const isCustomer = !!(state && customerState && state === customerState);
+    const failRedirect = (reason) => res.redirect(
+      adminFlow ? `/admin.html?google=${reason}` : `/#/login?google=${reason}`);
     if (error) {
       return failRedirect(error === 'access_denied' ? 'denied' : 'error');
     }
-    const expectedState = req.cookies && req.cookies[OAUTH_STATE_COOKIE];
-    // The state is single-use: clear it whatever happens next.
-    res.clearCookie(OAUTH_STATE_COOKIE, { path: '/api/auth/google' });
-    if (!code || !state || !expectedState || state !== expectedState) {
+    if (!code || !state || (!isAdmin && !isCustomer)) {
       return failRedirect('error');
     }
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
@@ -240,6 +266,28 @@ function authRoutes(ctx) {
     const email = String(profile.email).toLowerCase();
     const googleId = String(profile.sub);
     const name = (profile.name && String(profile.name).trim()) || email.split('@')[0];
+
+    // --- Admin Google login: email must match an EXISTING admin. ---
+    // No account is ever created here, and a locked admin account stays
+    // locked (Google login must not bypass the brute-force lockout).
+    if (isAdmin) {
+      const admin = await db.prepare('SELECT * FROM admin_users WHERE email = ?').get(email);
+      if (!admin) {
+        return failRedirect('not-admin');
+      }
+      if (admin.locked_until && Date.parse(admin.locked_until) > Date.now()) {
+        return failRedirect('locked');
+      }
+      if (admin.failed_attempts || admin.locked_until) {
+        await db.prepare(
+          'UPDATE admin_users SET failed_attempts = 0, locked_until = NULL WHERE id = ?'
+        ).run(admin.id);
+      }
+      await lib.auditLog(db, admin.id, 'admin.login-google', { email: admin.email });
+      const session = lib.createSession('admin', admin.id);
+      lib.setSessionCookies(res, session);
+      return res.redirect('/admin.html');
+    }
 
     // Match by google_id first, then by email (linking the google_id to
     // the existing account), then create a new Google account.
@@ -478,3 +526,9 @@ function authRoutes(ctx) {
 }
 
 module.exports = authRoutes;
+// Shared with routes/admin.js (admin Google login reuses this client,
+// redirect URI, and callback — see OAUTH_ADMIN_STATE_COOKIE above).
+module.exports.OAUTH_ADMIN_STATE_COOKIE = OAUTH_ADMIN_STATE_COOKIE;
+module.exports.OAUTH_STATE_MAX_AGE_MS = OAUTH_STATE_MAX_AGE_MS;
+module.exports.googleRedirectUri = googleRedirectUri;
+module.exports.GOOGLE_AUTH_URL = GOOGLE_AUTH_URL;

@@ -672,6 +672,55 @@ select.form-input { appearance: auto; }
   .topbar-user span { display: none; }
 }
 
+/* Show/hide password (eye icon) inside password fields. */
+.password-field { position: relative; display: block; }
+.password-field .form-input { padding-right: 42px; }
+.password-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 8px;
+  font-size: 15px;
+  line-height: 1;
+}
+.password-toggle:hover { color: var(--primary); }
+.password-toggle:focus-visible { outline: 2px solid var(--primary); border-radius: 4px; }
+
+/* Google Sign-In button on the login form (matches the customer site). */
+.btn-google {
+  background-color: #FFFFFF;
+  color: #1F1F1F;
+  border: 1px solid #DADCE0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.btn-google:hover { background-color: #F8F9FA; }
+.btn-google .fa-google {
+  background: conic-gradient(from -45deg, #EA4335, #FBBC05, #34A853, #4285F4, #EA4335);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: #4285F4;
+}
+
+.auth-divider {
+  display: flex; align-items: center; gap: 12px;
+  margin: 18px 0; color: var(--text-muted); font-size: 12px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+.auth-divider::before, .auth-divider::after {
+  content: ''; flex: 1; height: 1px; background: var(--border);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

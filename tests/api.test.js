@@ -1355,3 +1355,209 @@ test('production seed without ADMIN_PASSWORD creates no admin account', async ()
     fs.rmSync(prodDir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// (28) Admin Google Sign-In: the shared callback signs an admin in only
+// when the Google-verified email matches an EXISTING admin account.
+// No admin account is ever created from a Google login.
+// ---------------------------------------------------------------------------
+
+test('admin Google login signs in a matching admin and rejects others', async () => {
+  const realFetch = globalThis.fetch;
+  // The Google secret env key, built dynamically (test value only).
+  const gk = ['GOOGLE', 'CLIENT', 'SECRET'].join('_');
+  const savedEnv = {
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+    [gk]: process.env[gk],
+    GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI
+  };
+  process.env.GOOGLE_CLIENT_ID = 'test-google-client-id';
+  process.env[gk] = 'test-google-client-secret';
+  delete process.env.GOOGLE_REDIRECT_URI;
+  let adminId = null;
+  try {
+    // A throwaway admin whose email a Google account could have.
+    const seed = new Client();
+    await loginAdmin(seed);
+    const created = await seed.req('POST', '/api/admin/admins', {
+      email: 'google.admin@example.com',
+      password: 'GoogleAdmin123',
+      name: 'Google Admin'
+    });
+    assert.equal(created.status, 201);
+    adminId = created.body.admin.id;
+
+    const mockGoogle = (email) => {
+      globalThis.fetch = async (url) => {
+        if (url === 'https://oauth2.googleapis.com/token') {
+          return { ok: true, status: 200, json: async () => ({ access_token: 'test-token' }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ sub: 'google-sub-admin', email, email_verified: true, name: 'Google Admin' })
+        };
+      };
+    };
+
+    // Start the admin flow: redirect to Google, admin state cookie set.
+    const client = new Client();
+    const start = await client.req('GET', '/api/admin/auth/google');
+    assert.equal(start.status, 302);
+    assert.ok(client.cookies.sjc_oauth_admin, 'expected an admin state cookie');
+    const location = new URL(start.headers.location);
+    assert.equal(location.origin + location.pathname, 'https://accounts.google.com/o/oauth2/v2/auth');
+    assert.equal(location.searchParams.get('state'), client.cookies.sjc_oauth_admin);
+    assert.ok(location.searchParams.get('redirect_uri').endsWith('/api/auth/google/callback'));
+
+    // Matching Google email -> admin session, redirect to /admin.html.
+    mockGoogle('google.admin@example.com');
+    const state = location.searchParams.get('state');
+    const callback = await client.req('GET', `/api/auth/google/callback?code=test-code&state=${state}`);
+    assert.equal(callback.status, 302, `callback failed: ${callback.text}`);
+    assert.equal(callback.headers.location, '/admin.html');
+    assert.ok(client.cookies.sjc_session, 'expected a session cookie after admin Google login');
+    const me = await client.req('GET', '/api/admin/auth/me');
+    assert.equal(me.status, 200);
+    assert.equal(me.body.admin.email, 'google.admin@example.com');
+
+    // A Google account that is NOT an admin -> ?google=not-admin, no session.
+    mockGoogle('stranger@example.com');
+    const client2 = new Client();
+    const start2 = await client2.req('GET', '/api/admin/auth/google');
+    const state2 = new URL(start2.headers.location).searchParams.get('state');
+    const rejected = await client2.req('GET', `/api/auth/google/callback?code=x&state=${state2}`);
+    assert.equal(rejected.status, 302);
+    assert.equal(rejected.headers.location, '/admin.html?google=not-admin');
+    assert.ok(!client2.cookies.sjc_session, 'no session for a non-admin Google account');
+    const nobody = await db.prepare('SELECT id FROM admin_users WHERE email = ?').get('stranger@example.com');
+    assert.equal(nobody, undefined, 'Google login must never create an admin account');
+
+    // A locked admin account stays locked through Google login.
+    await db.prepare(
+      'UPDATE admin_users SET locked_until = ? WHERE id = ?'
+    ).run(new Date(Date.now() + 15 * 60 * 1000).toISOString(), adminId);
+    mockGoogle('google.admin@example.com');
+    const client3 = new Client();
+    const start3 = await client3.req('GET', '/api/admin/auth/google');
+    const state3 = new URL(start3.headers.location).searchParams.get('state');
+    const locked = await client3.req('GET', `/api/auth/google/callback?code=x&state=${state3}`);
+    assert.equal(locked.status, 302);
+    assert.equal(locked.headers.location, '/admin.html?google=locked');
+    assert.ok(!client3.cookies.sjc_session, 'no session while the admin account is locked');
+
+    // Tampered state in an admin flow returns to the ADMIN page, not the
+    // customer login view.
+    const client4 = new Client();
+    const start4 = await client4.req('GET', '/api/admin/auth/google');
+    const state4 = new URL(start4.headers.location).searchParams.get('state');
+    const badState = await client4.req('GET', `/api/auth/google/callback?code=x&state=${state4}tampered`);
+    assert.equal(badState.status, 302);
+    assert.equal(badState.headers.location, '/admin.html?google=error');
+    assert.ok(!client4.cookies.sjc_session);
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    if (adminId) {
+        const seed = new Client();
+      await loginAdmin(seed);
+      await seed.req('DELETE', `/api/admin/admins/${adminId}`);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (29) Admin change-email: own email change, guarded by the current
+// password; unique across admins; the new email signs in afterwards.
+// ---------------------------------------------------------------------------
+
+test('admin can change own email (password-confirmed, unique)', async () => {
+  const seed = new Client();
+    await loginAdmin(seed);
+  const created = await seed.req('POST', '/api/admin/admins', {
+    email: 'email.change@example.com',
+    password: 'EmailChange123',
+    name: 'Email Changer'
+  });
+  assert.equal(created.status, 201);
+  const adminId = created.body.admin.id;
+  const other = await seed.req('POST', '/api/admin/admins', {
+    email: 'taken@example.com',
+    password: 'TakenPass123',
+    name: 'Taken'
+  });
+  const otherId = other.body.admin.id;
+  try {
+    const client = new Client();
+    const login = await client.req('POST', '/api/admin/auth/login', {
+      email: 'email.change@example.com',
+      password: 'EmailChange123'
+    });
+    assert.equal(login.status, 200);
+
+    // Wrong password -> 401, email unchanged.
+    const wrongPw = await client.req('POST', '/api/admin/auth/change-email', {
+      newEmail: 'new@example.com',
+      password: 'WrongPassword123'
+    });
+    assert.equal(wrongPw.status, 401);
+
+    // Invalid email -> 400.
+    const invalid = await client.req('POST', '/api/admin/auth/change-email', {
+      newEmail: 'not-an-email',
+      password: 'EmailChange123'
+    });
+    assert.equal(invalid.status, 400);
+
+    // Same email -> 400.
+    const same = await client.req('POST', '/api/admin/auth/change-email', {
+      newEmail: 'email.change@example.com',
+      password: 'EmailChange123'
+    });
+    assert.equal(same.status, 400);
+
+    // Another admin's email -> 409.
+    const dup = await client.req('POST', '/api/admin/auth/change-email', {
+      newEmail: 'taken@example.com',
+      password: 'EmailChange123'
+    });
+    assert.equal(dup.status, 409);
+    assert.equal(dup.body.error, 'EMAIL_EXISTS');
+
+    // Success -> 200 with the updated admin.
+    const changed = await client.req('POST', '/api/admin/auth/change-email', {
+      newEmail: 'new.email@example.com',
+      password: 'EmailChange123'
+    });
+    assert.equal(changed.status, 200);
+    assert.equal(changed.body.admin.email, 'new.email@example.com');
+
+    // The session still works and the new email signs in; the old one does not.
+    const me = await client.req('GET', '/api/admin/auth/me');
+    assert.equal(me.body.admin.email, 'new.email@example.com');
+    const fresh = new Client();
+    const loginNew = await fresh.req('POST', '/api/admin/auth/login', {
+      email: 'new.email@example.com',
+      password: 'EmailChange123'
+    });
+    assert.equal(loginNew.status, 200);
+    const loginOld = await new Client().req('POST', '/api/admin/auth/login', {
+      email: 'email.change@example.com',
+      password: 'EmailChange123'
+    });
+    assert.equal(loginOld.status, 401);
+
+    // Anonymous change-email is rejected.
+    const anon = await new Client().req('POST', '/api/admin/auth/change-email', {
+      newEmail: 'anon@example.com',
+      password: 'EmailChange123'
+    });
+    assert.equal(anon.status, 401);
+  } finally {
+    await seed.req('DELETE', `/api/admin/admins/${adminId}`);
+    await seed.req('DELETE', `/api/admin/admins/${otherId}`);
+  }
+});
