@@ -263,7 +263,7 @@ totals, quote number) and then:
 
 Notification recipients (`adminEmail`, `adminWhatsapp`) are editable in the
 admin portal under Settings; they default to the business email
-`contact@saijyothsnacaterers.com` and WhatsApp `919848022338`.
+`pottahindu@gmail.com` and WhatsApp `919700873454`.
 
 ## Pricing semantics
 

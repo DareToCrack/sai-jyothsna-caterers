@@ -104,7 +104,7 @@ their password can receive a reset link. (Without this step, the
 
 **Cost:** free (Gmail allows 500 emails a day — far more than a catering
 business needs). The emails go to the admin email set in the admin
-portal under **Settings** (currently `contact@saijyothsnacaterers.com` —
+portal under **Settings** (currently `pottahindu@gmail.com` —
 change it there if you want notifications at a different address).
 
 > If you skip this step, notifications are not lost: they wait in the

@@ -263,18 +263,18 @@ CREATE TABLE IF NOT EXISTS uploads (
 // bare database (e.g. before the first seed run).
 const DEFAULT_SETTINGS = {
   businessName: 'Sai Jyothsna Caterers & Suppliers',
-  ownerName: 'Sai Jyothsna',
-  phone: '9848022338',
-  email: 'contact@saijyothsnacaterers.com',
-  whatsapp: '919848022338',
-  address: 'H.No. 4-12, Main Road, Hyderabad, Telangana - 500001',
+  ownerName: 'Santosh Kumar',
+  phone: '9700873454',
+  email: 'pottahindu@gmail.com',
+  whatsapp: '919700873454',
+  address: 'D.No. 6-15-3/1, Beside Sarvakamadamba Park, Opp. BSNL Office, Woodpeta, Anakapalle, Andhra Pradesh - 531001',
   gstNumber: '36AAAAA1111A1Z1',
   taxRate: 5,
   serviceChargeRate: 5,
   defaultTransportPrice: 1500,
   minGuestsForBooking: 20,
-  adminEmail: 'contact@saijyothsnacaterers.com',
-  adminWhatsapp: '919848022338'
+  adminEmail: 'pottahindu@gmail.com',
+  adminWhatsapp: '919700873454'
 };
 
 function defaultDbPath() {

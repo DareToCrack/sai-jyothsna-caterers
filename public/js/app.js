@@ -157,10 +157,10 @@ const FUNCTION_TYPES = [
 ];
 
 /* Business facts (also served by /api/business; these are the fallbacks). */
-const OWNER_PHONE = '9848022338';
-const OWNER_PHONE_TEL = '+919848022338';
-const OWNER_EMAIL = 'contact@saijyothsnacaterers.com';
-const OWNER_ADDRESS = 'H.No. 4-12, Main Road, Hyderabad, Telangana - 500001';
+const OWNER_PHONE = '9700873454';
+const OWNER_PHONE_TEL = '+919700873454';
+const OWNER_EMAIL = 'pottahindu@gmail.com';
+const OWNER_ADDRESS = 'D.No. 6-15-3/1, Beside Sarvakamadamba Park, Opp. BSNL Office, Woodpeta, Anakapalle, Andhra Pradesh - 531001';
 
 const DEFAULT_MIN_GUESTS = 20;
 const DEFAULT_GUESTS = 100;
@@ -201,7 +201,7 @@ class ApplicationController {
       functionType: '',
       customFunction: '',
       date: '',
-      address: { line: '', landmark: '', city: 'Hyderabad', district: 'Hyderabad', state: 'Telangana', pincode: '' },
+      address: { line: '', landmark: '', city: 'Anakapalle', district: 'Anakapalle', state: 'Andhra Pradesh', pincode: '' },
       notes: ''
     };
   }
