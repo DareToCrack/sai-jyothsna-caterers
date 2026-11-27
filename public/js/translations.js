@@ -434,7 +434,6 @@ const TRANSLATIONS = {
     footer_contact_title: "Contact Us",
     footer_rights: "All rights reserved.",
     owner_label: "Owner",
-    footer_since: "Catering since 2005",
     address_label: "Address",
     email_label: "Email",
 
@@ -877,7 +876,6 @@ const TRANSLATIONS = {
     footer_contact_title: "సంప్రదించండి",
     footer_rights: "అన్ని హక్కులు రిజర్వ్ చేయబడ్డాయి.",
     owner_label: "యజమాని",
-    footer_since: "2005 నుండి కేటరింగ్",
     address_label: "చిరునామా",
     email_label: "ఈమెయిల్",
 
@@ -1320,7 +1318,6 @@ const TRANSLATIONS = {
     footer_contact_title: "संपर्क करें",
     footer_rights: "सर्वाधिकार सुरक्षित।",
     owner_label: "स्वामी",
-    footer_since: "2005 से कैटरिंग",
     address_label: "पता",
     email_label: "ईमेल",
 
