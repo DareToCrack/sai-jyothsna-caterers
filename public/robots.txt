@@ -1,0 +1,7 @@
+# Sai Jyothsna Caterers & Suppliers
+User-agent: *
+Allow: /
+Disallow: /admin.html
+Disallow: /api/
+
+Sitemap: https://sai-jyothsna-caterers.vercel.app/sitemap.xml

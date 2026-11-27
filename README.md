@@ -341,6 +341,27 @@ on one switches the other as well; English is the default and the
 fallback for any missing phrase. Dish and category names are stored in
 EN/TE/HI in the database and are managed from the Menu Items screen.
 
+## SEO
+
+- `public/index.html` carries a keyword + location title, meta
+  description, canonical URL, Open Graph / Twitter cards (so links
+  shared on WhatsApp/Facebook show a preview image), and JSON-LD
+  `FoodEstablishment` structured data (name, address, phone, cuisines,
+  price range, area served, and the 4.7/3 aggregate rating from the
+  reviews shown on the site).
+- `public/robots.txt` allows crawling, disallows `/admin.html` and
+  `/api/`, and points at the sitemap; `public/sitemap.xml` lists the
+  homepage and the privacy page. The admin portal is `noindex`.
+- A `<noscript>` block in `index.html` carries the same business
+  summary for crawlers that do not run JavaScript. The app's real
+  content is JavaScript-rendered, so Google indexes the homepage
+  only — the hash routes (`#/menu`, `#/booking`…) are not separate
+  indexable pages.
+- **If the site moves to a custom domain**, update the canonical,
+  `og:url`, `og:image`, JSON-LD `url`/`image`, `robots.txt` sitemap
+  line and `sitemap.xml` URLs to the new domain, then resubmit the
+  sitemap in Google Search Console.
+
 ## Seed data
 
 Migrated exactly from the original project's `database.js` (ids preserved),
